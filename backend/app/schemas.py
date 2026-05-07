@@ -1,0 +1,92 @@
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+
+class DocumentSummary(BaseModel):
+    id: str
+    filename: str
+    original_filename: str
+    file_type: str
+    file_size: int
+    status: str
+    error_message: str | None
+    chunk_count: int
+    image_count: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ChunkOut(BaseModel):
+    id: str
+    content: str
+    chunk_index: int
+    page_number: int | None
+    chunk_type: str
+
+    model_config = {"from_attributes": True}
+
+
+class DocumentImageOut(BaseModel):
+    id: str
+    minio_path: str
+    page_number: int | None
+    image_index: int
+    description: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class DocumentDetail(DocumentSummary):
+    chunks: list[ChunkOut] = []
+    images: list[DocumentImageOut] = []
+
+
+class DocumentStatusOut(BaseModel):
+    id: str
+    status: str
+    error_message: str | None
+    chunk_count: int
+    image_count: int
+
+
+class IngestResponse(BaseModel):
+    doc_id: str
+    filename: str
+    status: str
+
+
+class DocumentsListResponse(BaseModel):
+    items: list[DocumentSummary]
+    total: int
+    skip: int
+    limit: int
+
+
+class Source(BaseModel):
+    type: Literal["text", "image"]
+    doc_id: str
+    filename: str
+    page: int | None
+    image_id: str | None
+    score: float
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    conversation_id: str | None = None
+    document_ids: list[str] | None = None
+
+
+class HealthService(BaseModel):
+    name: str
+    status: Literal["ok", "error"]
+    detail: str | None = None
+
+
+class HealthResponse(BaseModel):
+    status: Literal["ok", "degraded"]
+    services: list[HealthService]

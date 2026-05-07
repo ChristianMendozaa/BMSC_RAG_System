@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+.env.*
+
+# Data — databases, vector store, uploaded files
+data/
+
+# Downloaded models cache (large files, re-downloadable)
+models_cache/
+
+# Test / scratch documents dropped in the folder
+*.pdf
+*.docx
+*.pptx
+*.xlsx
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude
