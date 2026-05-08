@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import Image from 'next/image';
 import type { Message } from '@/types';
 import MessageBubble from './MessageBubble';
 
@@ -17,18 +18,43 @@ export default function ChatWindow({ messages }: Props) {
 
   if (messages.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-center px-6">
-        <div className="text-gray-400">
-          <div className="text-4xl mb-3">💬</div>
-          <p className="text-sm font-medium text-gray-500">Haz una pregunta sobre tus documentos</p>
-          <p className="text-xs text-gray-400 mt-1">Los documentos deben estar en estado &quot;listo&quot; para consultarlos</p>
+      <div
+        className="flex-1 flex items-center justify-center text-center px-6"
+        style={{ background: 'var(--bg-base)' }}
+      >
+        <div>
+          <div className="flex justify-center mb-5">
+            <Image
+              src="/LogoBMSC.png"
+              alt="Banco Mercantil Santa Cruz"
+              width={72}
+              height={72}
+              className="opacity-25"
+              style={{ filter: 'sepia(40%) saturate(80%)' }}
+            />
+          </div>
+          <p
+            className="text-xl font-semibold mb-2"
+            style={{
+              color: 'var(--text-primary)',
+              fontFamily: 'Playfair Display, serif',
+            }}
+          >
+            ¿En qué puedo ayudarte hoy?
+          </p>
+          <p className="text-sm max-w-xs mx-auto" style={{ color: 'var(--text-muted)' }}>
+            Sube un documento en Biblioteca para comenzar a hacer consultas
+          </p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+    <div
+      className="flex-1 overflow-y-auto px-4 py-4 space-y-4"
+      style={{ background: 'var(--bg-base)' }}
+    >
       {messages.map((msg) => (
         <MessageBubble key={msg.id} message={msg} />
       ))}

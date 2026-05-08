@@ -1,19 +1,121 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=DM+Sans:wght@300;400;500;600&display=swap');
 @import "tailwindcss";
 
 :root {
-  --background: #f9fafb;
-  --foreground: #111827;
+  /* Fondos */
+  --bg-base:        #050F09;
+  --bg-surface:     #0A1A10;
+  --bg-elevated:    #0F2218;
+  --bg-hover:       #142B1D;
+
+  /* Bordes */
+  --border-subtle:  #1A3524;
+  --border-default: #245030;
+  --border-gold:    #6B5020;
+
+  /* Dorado MSC */
+  --gold-bright:    #D4A843;
+  --gold-muted:     #9A7B2E;
+  --gold-subtle:    #2A1F08;
+
+  /* Maroon MSC */
+  --maroon:         #8B1E47;
+  --maroon-subtle:  #1E080F;
+
+  /* Textos */
+  --text-primary:   #F0EAD6;
+  --text-secondary: #8FAB98;
+  --text-muted:     #4A6B58;
+
+  /* Estados */
+  --status-green:   #2D7A4F;
+  --status-amber:   #A67B2A;
+  --status-red:     #8B2233;
+  --status-gray:    #3A5045;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --color-background: var(--bg-base);
+  --color-foreground: var(--text-primary);
+  --font-sans: 'DM Sans', Arial, Helvetica, sans-serif;
+  --font-display: 'Playfair Display', Georgia, serif;
   --font-mono: var(--font-geist-mono);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: 'DM Sans', Arial, Helvetica, sans-serif;
+}
+
+/* Animación de entrada para mensajes */
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slideUp 0.2s ease-out forwards;
+}
+
+/* Underline dorado en nav links */
+.nav-link {
+  position: relative;
+  color: var(--text-secondary);
+  transition: color 0.2s;
+  font-family: 'DM Sans', sans-serif;
+}
+
+.nav-link::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: var(--gold-bright);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.2s ease;
+}
+
+.nav-link:hover {
+  color: var(--gold-bright);
+}
+
+.nav-link:hover::after,
+.nav-link.active::after {
+  transform: scaleX(1);
+}
+
+.nav-link.active {
+  color: var(--gold-bright);
+}
+
+/* Scrollbar oscura */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-surface);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--gold-muted);
+}
+
+/* Selección de texto en dorado */
+::selection {
+  background: var(--gold-subtle);
+  color: var(--gold-bright);
 }

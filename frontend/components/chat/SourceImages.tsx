@@ -23,14 +23,36 @@ export default function SourceImages({ sources }: Props) {
             rel="noopener noreferrer"
             className="flex flex-col gap-1 shrink-0 group"
           >
-            <div className="w-48 h-48 rounded-lg overflow-hidden border border-gray-200 group-hover:border-blue-400 transition-colors shadow-sm">
+            <div
+              className="w-44 h-44 rounded-lg overflow-hidden transition-colors"
+              style={{
+                border: '1px solid var(--border-default)',
+                background: 'var(--bg-surface)',
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--gold-bright)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border-default)';
+              }}
+            >
               <img
                 src={getImageUrl(source.image_id!)}
                 alt={label}
-                className="w-full h-full object-contain bg-white"
+                className="w-full h-full object-contain"
+                style={{ background: 'var(--bg-elevated)' }}
               />
             </div>
-            <p className="text-xs text-gray-500 truncate max-w-[12rem] group-hover:text-blue-600">
+            <p
+              className="text-xs truncate max-w-[11rem] transition-colors"
+              style={{ color: 'var(--text-muted)' }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.color = 'var(--gold-bright)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)';
+              }}
+            >
               {label}
             </p>
           </a>

@@ -31,17 +31,35 @@ export default function MessageInput({ value, onChange, onSubmit, isStreaming }:
   };
 
   return (
-    <div className="flex items-end gap-2 bg-white border border-gray-200 rounded-2xl px-4 py-2 shadow-sm focus-within:border-blue-400 transition-colors">
+    <div
+      className="flex items-end gap-2 rounded-2xl px-4 py-2 transition-colors"
+      style={{
+        background: 'var(--bg-elevated)',
+        border: '1px solid var(--border-default)',
+      }}
+      onFocus={(e) => {
+        (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--gold-bright)';
+      }}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border-default)';
+        }
+      }}
+    >
       <textarea
         ref={textareaRef}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={handleKeyDown}
         disabled={isStreaming}
-        placeholder="Escribe tu pregunta... (Enter para enviar, Shift+Enter para nueva línea)"
+        placeholder="Escribe tu pregunta aquí..."
         rows={1}
-        className="flex-1 resize-none bg-transparent text-sm text-gray-900 placeholder-gray-400 outline-none min-h-[36px] max-h-36 py-1.5 disabled:opacity-60"
-        style={{ height: 'auto' }}
+        className="flex-1 resize-none bg-transparent text-sm outline-none min-h-[36px] max-h-36 py-1.5 disabled:opacity-60"
+        style={{
+          color: 'var(--text-primary)',
+          caretColor: 'var(--gold-bright)',
+          fontFamily: 'DM Sans, sans-serif',
+        }}
         onInput={(e) => {
           const target = e.target as HTMLTextAreaElement;
           target.style.height = 'auto';
@@ -51,8 +69,22 @@ export default function MessageInput({ value, onChange, onSubmit, isStreaming }:
       <button
         onClick={handleSubmit}
         disabled={!value.trim() || isStreaming}
-        className="p-1.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
-        aria-label="Enviar mensaje"
+        className="p-2 rounded-xl transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+        style={{
+          background: 'var(--gold-bright)',
+          color: '#0A1A10',
+        }}
+        onMouseEnter={(e) => {
+          if (!e.currentTarget.disabled) {
+            (e.currentTarget as HTMLButtonElement).style.background = 'var(--gold-muted)';
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!e.currentTarget.disabled) {
+            (e.currentTarget as HTMLButtonElement).style.background = 'var(--gold-bright)';
+          }
+        }}
+        aria-label="Enviar pregunta"
       >
         <SendHorizonal size={16} />
       </button>

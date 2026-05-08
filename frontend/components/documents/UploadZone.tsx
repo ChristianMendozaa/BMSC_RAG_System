@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Upload, CheckCircle, AlertCircle } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 import { uploadDocument } from '@/lib/api';
 
 const ACCEPTED_TYPES: Record<string, string[]> = {
@@ -37,20 +37,20 @@ export default function UploadZone({ onUploadComplete }: Props) {
       if (acceptedFiles.length === 0) return;
       const file = acceptedFiles[0];
 
-      setUploadState({ status: 'uploading', message: `Subiendo ${file.name}...` });
+      setUploadState({ status: 'uploading', message: `Cargando ${file.name}...` });
 
       try {
         const result = await uploadDocument(file);
         setUploadState({
           status: 'success',
-          message: `"${result.filename}" en cola para procesamiento`,
+          message: `"${result.filename}" recibido y en proceso`,
         });
         onUploadComplete();
         setTimeout(() => setUploadState({ status: 'idle', message: '' }), 3000);
       } catch (err) {
         setUploadState({
           status: 'error',
-          message: err instanceof Error ? err.message : 'Error al subir el archivo',
+          message: err instanceof Error ? err.message : 'No se pudo subir el archivo. Intenta de nuevo.',
         });
       }
     },
@@ -64,46 +64,79 @@ export default function UploadZone({ onUploadComplete }: Props) {
     disabled: uploadState.status === 'uploading',
   });
 
+  const isUploading = uploadState.status === 'uploading';
+
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div
         {...getRootProps()}
-        className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
-          isDragActive
-            ? 'border-blue-400 bg-blue-50'
-            : uploadState.status === 'uploading'
-            ? 'border-gray-200 bg-gray-50 cursor-not-allowed'
-            : 'border-gray-300 hover:border-blue-400 hover:bg-blue-50'
-        }`}
+        className="border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all duration-200"
+        style={{
+          background: isDragActive ? 'var(--gold-subtle)' : 'var(--bg-elevated)',
+          borderColor: isDragActive
+            ? 'var(--gold-bright)'
+            : isUploading
+            ? 'var(--border-subtle)'
+            : 'var(--border-gold)',
+          cursor: isUploading ? 'not-allowed' : 'pointer',
+        }}
+        onMouseEnter={(e) => {
+          if (!isUploading && !isDragActive) {
+            (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--gold-bright)';
+            (e.currentTarget as HTMLDivElement).style.background = 'var(--gold-subtle)';
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!isDragActive) {
+            (e.currentTarget as HTMLDivElement).style.borderColor = isUploading ? 'var(--border-subtle)' : 'var(--border-gold)';
+            (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-elevated)';
+          }
+        }}
       >
         <input {...getInputProps()} />
-        <Upload
-          size={32}
-          className={`mx-auto mb-3 ${isDragActive ? 'text-blue-500' : 'text-gray-400'}`}
-        />
+
+        {isUploading ? (
+          <Loader2
+            size={32}
+            className="mx-auto mb-3 animate-spin"
+            style={{ color: 'var(--gold-bright)' }}
+          />
+        ) : (
+          <Upload
+            size={32}
+            className="mx-auto mb-3"
+            style={{ color: isDragActive ? 'var(--gold-bright)' : 'var(--gold-muted)' }}
+          />
+        )}
+
         {isDragActive ? (
-          <p className="text-sm text-blue-600 font-medium">Suelta el archivo aquí</p>
+          <p className="text-sm font-medium" style={{ color: 'var(--gold-bright)' }}>
+            Suelta el archivo aquí
+          </p>
+        ) : isUploading ? (
+          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+            {uploadState.message}
+          </p>
         ) : (
           <>
-            <p className="text-sm text-gray-600 font-medium">
-              Arrastra un archivo o haz click para seleccionar
+            <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+              Arrastra tu documento aquí, o haz clic para buscarlo
             </p>
-            <p className="text-xs text-gray-400 mt-1">
-              PDF, DOCX, PPTX, XLSX, TXT, MD, JPG, PNG, WEBP
+            <p className="text-xs mt-1.5" style={{ color: 'var(--text-muted)' }}>
+              PDF, Word, Excel, PowerPoint, imágenes y más
             </p>
           </>
         )}
       </div>
 
-      {uploadState.status !== 'idle' && (
+      {uploadState.status !== 'idle' && uploadState.status !== 'uploading' && (
         <div
-          className={`flex items-center gap-2 text-sm px-3 py-2 rounded-lg ${
-            uploadState.status === 'uploading'
-              ? 'bg-blue-50 text-blue-700'
-              : uploadState.status === 'success'
-              ? 'bg-green-50 text-green-700'
-              : 'bg-red-50 text-red-700'
-          }`}
+          className="flex items-center gap-2 text-sm px-4 py-2.5 rounded-lg"
+          style={{
+            background: uploadState.status === 'success' ? '#0A1F12' : 'var(--maroon-subtle)',
+            border: `1px solid ${uploadState.status === 'success' ? 'var(--status-green)' : 'var(--maroon)'}`,
+            color: uploadState.status === 'success' ? '#4ADE80' : '#F87171',
+          }}
         >
           {uploadState.status === 'success' && <CheckCircle size={14} />}
           {uploadState.status === 'error' && <AlertCircle size={14} />}
