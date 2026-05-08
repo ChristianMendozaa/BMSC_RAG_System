@@ -15,10 +15,24 @@ from app.utils.model_manager import (
 logger = logging.getLogger(__name__)
 
 
-# ── Text embeddings (multilingual MiniLM, 384 dims) ────────────────────────
+def _needs_e5_prefix() -> bool:
+    return "e5" in settings.embed_model_id.lower()
+
+
+def _query_prefix(text: str) -> str:
+    """Prepend 'query: ' for multilingual-e5 asymmetric retrieval."""
+    return f"query: {text}" if _needs_e5_prefix() else text
+
+
+def _passage_prefix(text: str) -> str:
+    """Prepend 'passage: ' for multilingual-e5 asymmetric retrieval."""
+    return f"passage: {text}" if _needs_e5_prefix() else text
+
+
+# ── Text embeddings (384 dims) ─────────────────────────────────────────────
 def _embed_text_sync(text: str) -> list[float]:
     model = get_embedder()
-    vector = model.encode(text, normalize_embeddings=True, show_progress_bar=False)
+    vector = model.encode(_query_prefix(text), normalize_embeddings=True, show_progress_bar=False)
     return vector.tolist()
 
 
@@ -28,8 +42,9 @@ async def embed_text(text: str) -> list[float]:
 
 def _embed_texts_batch_sync(texts: list[str]) -> list[list[float]]:
     model = get_embedder()
+    prefixed = [_passage_prefix(t) for t in texts]
     vectors = model.encode(
-        texts,
+        prefixed,
         normalize_embeddings=True,
         show_progress_bar=False,
         batch_size=32,

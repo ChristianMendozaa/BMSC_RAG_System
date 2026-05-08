@@ -115,14 +115,14 @@ async def _images_for_text_pages(text_contexts: list[dict]) -> list[dict]:
     for page in _extract_mentioned_pages(text_contexts):
         for doc_id in doc_id_set:
             key = (doc_id, page)
-            page_score.setdefault(key, 0.5)
+            page_score.setdefault(key, 0.75)
 
     # Pages resolved via the figure-page index ("Figura 22" → p.84, etc.)
     fig_pages = await _pages_from_figure_refs(text_contexts)
     for page in fig_pages:
         for doc_id in doc_id_set:
             key = (doc_id, page)
-            page_score.setdefault(key, 0.6)
+            page_score.setdefault(key, 0.88)
 
     if not page_score:
         return []
@@ -144,9 +144,9 @@ async def _images_for_text_pages(text_contexts: list[dict]) -> list[dict]:
             "filename": filename,
             "page": img.page_number,
             "content": img.description or "",
-            # Inherit the score of the text hit that anchors this image, with
-            # a small penalty since the link is positional rather than semantic.
-            "score": page_score.get((img.document_id, img.page_number), 0.5) * 0.9,
+            # Inherit the score from the text hit anchoring this image.
+            # Capped at 0.92 so strong semantic image results can still win.
+            "score": min(page_score.get((img.document_id, img.page_number), 0.50), 0.92),
         }
         for img, filename in rows
     ]

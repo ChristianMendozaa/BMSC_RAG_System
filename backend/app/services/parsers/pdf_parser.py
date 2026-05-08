@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 # A page is considered a vector-diagram page when it has at least this many
 # drawing paths AND its text is short (labels only, not a prose page).
-_MIN_DRAWINGS = 15
-_MAX_TEXT_FOR_DIAGRAM = 600  # chars; diagram pages have labels, not paragraphs
+_MIN_DRAWINGS = 8
+_MAX_TEXT_FOR_DIAGRAM = 1500  # chars; class diagrams have many label texts
 _RENDER_DPI = 150
 
 

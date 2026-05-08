@@ -37,7 +37,9 @@ _VISUAL_TERMS = re.compile(
     r'\b('
     r'diagrama|figura|imagen|im[aá]genes|esquema|gr[aá]fico|tabla|captura|'
     r'mapa|flujo|arquitectura|cronograma|mockup|pantalla|interfaz|'
-    r'foto|fotograf[ií]a|ilustraci[oó]n|dibujo|plano|p[aá]gina'
+    r'foto|fotograf[ií]a|ilustraci[oó]n|dibujo|plano|p[aá]gina|'
+    r'uml|clases|clase|entidad|relaci[oó]n|herencia|composici[oó]n|'
+    r'componente|secuencia|actividad|paquete|despliegue|modelo'
     r')\b',
     re.IGNORECASE,
 )
@@ -299,6 +301,7 @@ async def stream_chat(
                 stream=True,
                 stop=["Usuario:", "\nUser:", "<|im_end|>"],
                 temperature=0.7,
+                repeat_penalty=settings.llm_repeat_penalty,
             )
             for chunk in stream:
                 delta = chunk["choices"][0]["delta"]

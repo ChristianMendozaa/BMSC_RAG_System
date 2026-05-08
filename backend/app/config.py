@@ -24,11 +24,12 @@ class Settings(BaseSettings):
     llm_gguf_filename: str = "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"
 
     # Text embeddings — used for the document text and image-description chunks
-    embed_model_id: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    # intfloat/multilingual-e5-small requires query:/passage: prefixes (asymmetric retrieval)
+    embed_model_id: str = "intfloat/multilingual-e5-small"
 
     # BLIP image captioning — fast CPU-friendly model (~450 MB, 2-5s/image)
     blip_model_id: str = "Salesforce/blip-image-captioning-base"
-    blip_max_new_tokens: int = 80
+    blip_max_new_tokens: int = 200
 
     # Ingestion performance knobs
     max_images_per_doc: int = 50   # with BLIP (~3s/img) 50 imgs ≈ 2-3 min; set in .env to override
@@ -45,11 +46,12 @@ class Settings(BaseSettings):
     llm_n_ctx: int = 8192
     llm_n_threads: int = 0      # 0 = auto-detect CPU count
     llm_max_tokens: int = 1024
+    llm_repeat_penalty: float = 1.3   # penalizes token repetition; >1.0 breaks loops
 
     # Retrieval / RAG knobs
     max_context_chunks: int = 5
     max_context_images: int = 3
-    min_image_score: float = 0.45   # drop images below this absolute similarity
+    min_image_score: float = 0.35   # drop images below this absolute similarity
     image_score_gap: float = 0.80   # drop images below best_image_score * this ratio
 
     # Visual-query mode (relaxed filters when the query is clearly about images)
@@ -63,7 +65,7 @@ class Settings(BaseSettings):
 
     qdrant_collection_text: str = "text_chunks"
     qdrant_collection_image_visual: str = "image_visual"
-    embedding_dims: int = 384   # paraphrase-multilingual-MiniLM-L12-v2 = 384 dims
+    embedding_dims: int = 384   # multilingual-e5-small = 384 dims
 
 
 settings = Settings()

@@ -14,6 +14,17 @@ _FIG_CAPTION = re.compile(
     r'\b(Figura|Fig\.?|Diagrama|Tabla|Imagen|Esquema)\s+(\d+)[.:\s]',
     re.IGNORECASE,
 )
+
+# Extracts the full caption line from page text: "Figura 5. Diagrama de Clases del sistema..."
+_CAPTION_EXTRACT_RE = re.compile(
+    r'(?:Figura|Fig\.?|Diagrama|Tabla|Imagen|Esquema)\s+\d+[.\s:][^\n]{5,200}',
+    re.IGNORECASE,
+)
+
+
+def _extract_figure_caption(text: str) -> str:
+    m = _CAPTION_EXTRACT_RE.search(text)
+    return m.group(0).strip()[:200] if m else ""
 from app.services import embedder, file_storage, ocr as ocr_service, vector_store
 from app.services import chunker as chunker_service
 from app.services.parsers import pdf_parser, docx_parser, pptx_parser, xlsx_parser, image_parser
@@ -310,14 +321,20 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
     # ── Step 6: Build image description chunks + batch embed + upsert ─────
     image_desc_blocks = []
     for rec, _ in db_image_records:
-        page_text = _surrounding_page_text(rec.page_number)
+        same_page_text = page_text_map.get(rec.page_number, "")
+        fig_caption = _extract_figure_caption(same_page_text)
+
         parts = []
+        # Figure caption first: "Figura 5. Diagrama de Clases del sistema..."
+        # Highest-precision retrieval signal — matches queries about specific diagram types.
+        if fig_caption:
+            parts.append(f"Etiqueta: {fig_caption}")
+        # OCR second: literal text inside the image (class names, method names, labels)
+        if rec.ocr_text:
+            parts.append(f"Texto OCR: {rec.ocr_text.strip()}")
+        # BLIP caption third: visual description
         if rec.description:
             parts.append(rec.description.strip())
-        if rec.ocr_text:
-            parts.append(f"Texto en la imagen: {rec.ocr_text.strip()}")
-        if page_text:
-            parts.append(f"Contexto de la página: {page_text}")
         if not parts:
             continue
         augmented = "\n".join(parts)
@@ -325,7 +342,7 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
             "text": augmented,
             "caption": rec.description or "",
             "ocr_text": rec.ocr_text or "",
-            "page_context": page_text,
+            "fig_caption": fig_caption,
             "page_number": rec.page_number,
             "image_id": rec.id,
             "image_index": rec.image_index,
@@ -349,7 +366,7 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
                     "content": image_desc_blocks[i]["text"],
                     "caption": image_desc_blocks[i]["caption"],
                     "ocr_text": image_desc_blocks[i]["ocr_text"],
-                    "page_context_used": image_desc_blocks[i]["page_context"][:1000],
+                    "fig_caption": image_desc_blocks[i]["fig_caption"],
                     "filename": filename,
                     "page_number": image_desc_blocks[i]["page_number"],
                     "chunk_type": "image_description",
