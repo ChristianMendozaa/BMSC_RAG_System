@@ -1,7 +1,7 @@
 import logging
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -20,6 +20,7 @@ MAX_FILE_SIZE = 200 * 1024 * 1024  # 200 MB
 async def ingest_document(
     file: UploadFile,
     background_tasks: BackgroundTasks,
+    role_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     filename = file.filename or "unnamed"
@@ -45,6 +46,7 @@ async def ingest_document(
         file_type=ext.lstrip("."),
         file_size=file_size,
         status="pending",
+        role_id=role_id,
     )
     db.add(doc)
     await db.commit()

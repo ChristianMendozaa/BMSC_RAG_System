@@ -11,31 +11,42 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 export { API_URL };
 
+function getAuthHeaders(isFormData = false): HeadersInit {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (!isFormData) headers['Content-Type'] = 'application/json';
+  return headers;
+}
+
 // ── Documents ──────────────────────────────────────────────────────────────
 
 export async function getDocuments(skip = 0, limit = 50): Promise<DocumentsListResponse> {
-  const res = await fetch(`${API_URL}/api/documents?skip=${skip}&limit=${limit}`);
+  const res = await fetch(`${API_URL}/api/documents?skip=${skip}&limit=${limit}`, {
+    headers: getAuthHeaders()
+  });
   if (!res.ok) throw new Error(`Failed to fetch documents: ${res.status}`);
   return res.json() as Promise<DocumentsListResponse>;
 }
 
 export async function getDocument(id: string): Promise<DocumentDetail> {
-  const res = await fetch(`${API_URL}/api/documents/${id}`);
+  const res = await fetch(`${API_URL}/api/documents/${id}`, { headers: getAuthHeaders() });
   if (!res.ok) throw new Error(`Failed to fetch document: ${res.status}`);
   return res.json() as Promise<DocumentDetail>;
 }
 
 export async function deleteDocument(id: string): Promise<void> {
-  const res = await fetch(`${API_URL}/api/documents/${id}`, { method: 'DELETE' });
+  const res = await fetch(`${API_URL}/api/documents/${id}`, { method: 'DELETE', headers: getAuthHeaders() });
   if (!res.ok && res.status !== 204) {
     throw new Error(`Failed to delete document: ${res.status}`);
   }
 }
 
-export async function uploadDocument(file: File): Promise<IngestResponse> {
+export async function uploadDocument(file: File, roleId?: string): Promise<IngestResponse> {
   const form = new FormData();
   form.append('file', file);
-  const res = await fetch(`${API_URL}/api/ingest`, { method: 'POST', body: form });
+  if (roleId) form.append('role_id', roleId);
+  const res = await fetch(`${API_URL}/api/ingest`, { method: 'POST', body: form, headers: getAuthHeaders(true) });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error((err as { detail: string }).detail ?? `Upload failed: ${res.status}`);
@@ -48,7 +59,7 @@ export function getImageUrl(imageId: string): string {
 }
 
 export async function getConversationHistory(conversationId: string): Promise<Message[]> {
-  const res = await fetch(`${API_URL}/api/chat/history/${conversationId}`);
+  const res = await fetch(`${API_URL}/api/chat/history/${conversationId}`, { headers: getAuthHeaders() });
   if (!res.ok) throw new Error(`Failed to fetch history: ${res.status}`);
   const turns = await res.json() as { role: string; content: string; sources: Source[] }[];
   return turns.map((t) => ({
@@ -71,7 +82,7 @@ export async function streamChat(
   try {
     response = await fetch(`${API_URL}/api/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify(request),
     });
   } catch (err) {
@@ -134,4 +145,54 @@ export async function streamChat(
   } finally {
     reader.releaseLock();
   }
+}
+
+// ── Admin Endpoints ─────────────────────────────────────────────────────────
+
+export async function getRoles() {
+  const res = await fetch(`${API_URL}/api/admin/roles`, { headers: getAuthHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch roles');
+  return res.json();
+}
+
+export async function createRole(name: string) {
+  const res = await fetch(`${API_URL}/api/admin/roles`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ name })
+  });
+  if (!res.ok) throw new Error('Failed to create role');
+  return res.json();
+}
+
+export async function getUsers() {
+  const res = await fetch(`${API_URL}/api/admin/users`, { headers: getAuthHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch users');
+  return res.json();
+}
+
+export async function createUser(data: any) {
+  const res = await fetch(`${API_URL}/api/admin/users`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) throw new Error('Failed to create user');
+  return res.json();
+}
+
+export async function getIncidents() {
+  const res = await fetch(`${API_URL}/api/admin/incidents`, { headers: getAuthHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch incidents');
+  return res.json();
+}
+
+export async function createIncident(data: any) {
+  const res = await fetch(`${API_URL}/api/admin/incidents`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) throw new Error('Failed to create incident');
+  return res.json();
 }

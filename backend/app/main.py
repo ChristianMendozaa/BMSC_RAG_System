@@ -6,11 +6,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.database import Base, engine
-from app.routers import chat, documents, ingest
+from app.database import Base, engine, AsyncSessionLocal
+from app.routers import chat, documents, ingest, auth, admin
 from app.schemas import HealthResponse, HealthService
 from app.services import embedder, file_storage, vector_store
 from app.utils.model_manager import download_and_load_all
+from app.models import Role, User
+from app.utils.security import get_password_hash
+from sqlalchemy.future import select
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,8 +48,44 @@ async def lifespan(_app: FastAPI):
                     "ALTER TABLE document_images ADD COLUMN ocr_text TEXT"
                 )
                 logger.info("      Migration: added document_images.ocr_text")
+                
+            doc_cols = {
+                row[1] for row in sync_conn.exec_driver_sql(
+                    "PRAGMA table_info(documents)"
+                ).fetchall()
+            }
+            if "role_id" not in doc_cols:
+                sync_conn.exec_driver_sql(
+                    "ALTER TABLE documents ADD COLUMN role_id VARCHAR REFERENCES roles(id) ON DELETE SET NULL"
+                )
+                logger.info("      Migration: added documents.role_id")
 
         await conn.run_sync(_migrate)
+        
+    logger.info("[2.5/4] Creating default roles and admin...")
+    async with AsyncSessionLocal() as db:
+        admin_role_result = await db.execute(select(Role).where(Role.name == "admin"))
+        admin_role = admin_role_result.scalar_one_or_none()
+        if not admin_role:
+            admin_role = Role(name="admin")
+            db.add(admin_role)
+            await db.commit()
+            await db.refresh(admin_role)
+            
+        normal_role_result = await db.execute(select(Role).where(Role.name == "normal"))
+        if not normal_role_result.scalar_one_or_none():
+            db.add(Role(name="normal"))
+            await db.commit()
+            
+        admin_user_result = await db.execute(select(User).where(User.email == "admin@bmsc.com"))
+        if not admin_user_result.scalar_one_or_none():
+            admin_user = User(
+                email="admin@bmsc.com",
+                hashed_password=get_password_hash("admin123"),
+                role_id=admin_role.id
+            )
+            db.add(admin_user)
+            await db.commit()
 
     logger.info("[3/4] Initializing embedded Qdrant vector store...")
     await vector_store.ensure_collections()
@@ -81,6 +120,8 @@ app.add_middleware(
 app.include_router(ingest.router)
 app.include_router(documents.router)
 app.include_router(chat.router)
+app.include_router(auth.router)
+app.include_router(admin.router)
 
 
 @app.get("/api/health", response_model=HealthResponse)

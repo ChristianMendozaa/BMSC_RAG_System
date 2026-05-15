@@ -8,7 +8,7 @@ import { streamChat, getDocuments, getConversationHistory } from '@/lib/api';
 import type { DocumentsListResponse, Message } from '@/types';
 import ChatWindow from '@/components/chat/ChatWindow';
 import MessageInput from '@/components/chat/MessageInput';
-import { RotateCcw, SlidersHorizontal, X, FileText } from 'lucide-react';
+import { RotateCcw, SlidersHorizontal, X, FileText, LogOut } from 'lucide-react';
 
 const fetcher = () => getDocuments(0, 100);
 
@@ -116,6 +116,27 @@ function SidebarContent({
           <RotateCcw size={12} />
           Nueva consulta
         </button>
+        <button
+          onClick={() => {
+            localStorage.removeItem('token');
+            localStorage.removeItem('role');
+            window.location.href = '/login';
+          }}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 mt-2 rounded-lg text-xs transition-colors"
+          style={{
+            border: '1px solid var(--border-default)',
+            color: 'var(--text-secondary)',
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)';
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+          }}
+        >
+          <LogOut size={12} />
+          Cerrar Sesión
+        </button>
       </div>
     </div>
   );
@@ -138,6 +159,7 @@ export default function ChatPage() {
   useEffect(() => {
     const stored = localStorage.getItem('conversationId');
     if (!stored) return;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     setConversationId(stored);
     getConversationHistory(stored)
       .then((msgs) => { if (msgs.length > 0) setMessages(msgs); })

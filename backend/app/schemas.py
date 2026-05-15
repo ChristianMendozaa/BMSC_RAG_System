@@ -90,3 +90,43 @@ class HealthService(BaseModel):
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
     services: list[HealthService]
+
+class RoleCreate(BaseModel):
+    name: str
+
+class RoleOut(BaseModel):
+    id: str
+    name: str
+    model_config = {"from_attributes": True}
+
+class UserCreate(BaseModel):
+    email: str
+    password: str
+    role_id: str
+
+class UserOut(BaseModel):
+    id: str
+    email: str
+    role_id: str
+    role: RoleOut
+    model_config = {"from_attributes": True}
+
+class IncidentCreate(BaseModel):
+    description: str
+    solution: str
+    resolved_by: str
+
+class IncidentOut(BaseModel):
+    id: str
+    description: str
+    solution: str
+    resolved_by: str
+    created_at: datetime
+    model_config = {"from_attributes": True}
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    email: str | None = None

@@ -19,6 +19,9 @@ class Document(Base):
     __tablename__ = "documents"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    role_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("roles.id", ondelete="SET NULL"), nullable=True
+    )
     filename: Mapped[str] = mapped_column(String, nullable=False)
     original_filename: Mapped[str] = mapped_column(String, nullable=False)
     file_type: Mapped[str] = mapped_column(String, nullable=False)
@@ -42,6 +45,45 @@ class Document(Base):
     figures: Mapped[list["DocumentFigure"]] = relationship(
         "DocumentFigure", back_populates="document", cascade="all, delete-orphan"
     )
+    role: Mapped["Role"] = relationship("Role", back_populates="documents")
+
+
+class Role(Base):
+    __tablename__ = "roles"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    users: Mapped[list["User"]] = relationship("User", back_populates="role")
+    documents: Mapped[list["Document"]] = relationship("Document", back_populates="role")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    email: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    hashed_password: Mapped[str] = mapped_column(String, nullable=False)
+    role_id: Mapped[str] = mapped_column(
+        String, ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+    role: Mapped["Role"] = relationship("Role", back_populates="users")
+
+
+class Incident(Base):
+    __tablename__ = "incidents"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    solution: Mapped[str] = mapped_column(Text, nullable=False)
+    resolved_by: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class Chunk(Base):
