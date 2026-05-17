@@ -3,18 +3,34 @@
 import { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Menu, X, MessageSquare, BookOpen } from 'lucide-react';
+import { Menu, X, MessageSquare, ShieldCheck, LogOut } from 'lucide-react';
+import { useAuth } from '@/lib/auth-context';
+import { logout } from '@/lib/api';
 
 export default function NavBar() {
   const pathname = usePathname();
+  const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { user, isAdmin, clearAuth } = useAuth();
 
-  const links = [
+  const handleLogout = async () => {
+    await logout();
+    clearAuth();
+    router.push('/login');
+  };
+
+  const baseLinks = [
     { href: '/chat', label: 'Consultas', icon: MessageSquare },
-    { href: '/documents', label: 'Biblioteca', icon: BookOpen },
   ];
+
+  const links = isAdmin
+    ? [...baseLinks, { href: '/admin', label: 'Admin', icon: ShieldCheck }]
+    : baseLinks;
+
+  // No mostrar navbar en la página de login
+  if (!user && pathname === '/login') return null;
 
   return (
     <nav
@@ -36,22 +52,48 @@ export default function NavBar() {
         />
       </Link>
 
-      {/* Desktop links */}
-      <div
-        className="hidden md:flex items-center gap-1"
-        style={{ borderLeft: '1px solid var(--border-subtle)', paddingLeft: '1.5rem', marginLeft: '1.5rem' }}
-      >
-        {links.map(({ href, label }) => (
-          <Link
-            key={href}
-            href={href}
-            className={`nav-link px-4 py-1.5 text-sm rounded-md transition-colors ${
-              pathname?.startsWith(href) ? 'active' : ''
-            }`}
+      {/* Desktop links + user */}
+      <div className="hidden md:flex items-center gap-2">
+        <div
+          className="flex items-center gap-1"
+          style={{ borderLeft: '1px solid var(--border-subtle)', paddingLeft: '1.5rem', marginLeft: '1.5rem' }}
+        >
+          {links.map(({ href, label }) => (
+            <Link
+              key={href}
+              href={href}
+              className={`nav-link px-4 py-1.5 text-sm rounded-md transition-colors ${
+                pathname?.startsWith(href) ? 'active' : ''
+              }`}
+            >
+              {label}
+            </Link>
+          ))}
+        </div>
+
+        {user && (
+          <div
+            className="flex items-center gap-3 pl-4 ml-2"
+            style={{ borderLeft: '1px solid var(--border-subtle)' }}
           >
-            {label}
-          </Link>
-        ))}
+            <div className="text-right">
+              <p className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                {user.username}
+              </p>
+              <p className="text-xs" style={{ color: 'var(--gold-muted)' }}>
+                {user.role.name}
+              </p>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="p-1.5 rounded-md transition-colors hover:opacity-70"
+              style={{ color: 'var(--text-muted)' }}
+              title="Cerrar sesión"
+            >
+              <LogOut size={16} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Mobile hamburger */}
@@ -101,9 +143,7 @@ export default function NavBar() {
                 <Dialog.Close asChild key={href}>
                   <Link
                     href={href}
-                    className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm transition-colors ${
-                      pathname?.startsWith(href) ? 'active' : ''
-                    }`}
+                    className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm transition-colors`}
                     style={{
                       color: pathname?.startsWith(href) ? 'var(--gold-bright)' : 'var(--text-secondary)',
                       background: pathname?.startsWith(href) ? 'var(--gold-subtle)' : 'transparent',
@@ -116,21 +156,30 @@ export default function NavBar() {
               ))}
             </div>
 
-            {/* Drawer footer */}
-            <div
-              className="px-4 py-3"
-              style={{ borderTop: '1px solid var(--border-subtle)' }}
-            >
-              <p
-                className="text-xs"
-                style={{ color: 'var(--text-muted)', fontFamily: 'Playfair Display, serif' }}
+            {/* User + logout */}
+            {user && (
+              <div
+                className="px-4 py-3 flex items-center justify-between"
+                style={{ borderTop: '1px solid var(--border-subtle)' }}
               >
-                Banco Mercantil Santa Cruz
-              </p>
-              <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                Asistente Interno · desde 1905
-              </p>
-            </div>
+                <div>
+                  <p className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                    {user.username}
+                  </p>
+                  <p className="text-xs" style={{ color: 'var(--gold-muted)' }}>
+                    {user.role.name}
+                  </p>
+                </div>
+                <button
+                  onClick={() => { setMobileOpen(false); handleLogout(); }}
+                  className="p-1.5 rounded-md"
+                  style={{ color: 'var(--text-muted)' }}
+                  title="Cerrar sesión"
+                >
+                  <LogOut size={16} />
+                </button>
+              </div>
+            )}
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

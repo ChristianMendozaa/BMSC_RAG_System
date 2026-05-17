@@ -1,153 +1,91 @@
 import asyncio
 import logging
-import uuid
 from pathlib import Path
+from typing import Any, Optional
 
-from qdrant_client import QdrantClient
-from qdrant_client.http import models as qmodels
+import chromadb
+from chromadb.config import Settings as ChromaSettings
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_client: QdrantClient | None = None
+_client: Optional[Any] = None
+_collection: Optional[Any] = None
 
 
-def get_client() -> QdrantClient:
-    global _client
-    if _client is None:
-        db_path = Path(settings.qdrant_path)
+def _get_collection() -> Any:
+    global _client, _collection
+    if _collection is None:
+        db_path = Path(settings.chroma_path)
         db_path.mkdir(parents=True, exist_ok=True)
-        _client = QdrantClient(path=str(db_path))
-        logger.info("Qdrant embedded mode at: %s", db_path)
-    return _client
-
-
-def _point_id(doc_id: str, index: int) -> str:
-    base = uuid.UUID(doc_id).int
-    return str(uuid.UUID(int=(base + index) % (2**128)))
-
-
-def _image_point_id(image_id: str) -> str:
-    """Stable point ID for the visual collection — derived from image_id (a UUID)."""
-    return image_id  # image_id is already a UUID string
-
-
-def _get_stored_dims(client: QdrantClient, collection_name: str) -> int | None:
-    try:
-        info = client.get_collection(collection_name)
-        vectors = info.config.params.vectors
-        if vectors is None:
-            return None
-        if hasattr(vectors, "size"):
-            return int(vectors.size)
-        if isinstance(vectors, dict) and vectors:
-            first = next(iter(vectors.values()))
-            return int(first.size)
-    except Exception as exc:
-        logger.warning("Could not read collection dims: %s", exc)
-    return None
-
-
-def _ensure_collection(client: QdrantClient, name: str, dims: int) -> None:
-    existing = {c.name for c in client.get_collections().collections}
-    if name in existing:
-        stored = _get_stored_dims(client, name)
-        if stored is None:
-            logger.warning("Cannot read dims for '%s' — recreating.", name)
-            client.delete_collection(name)
-        elif stored != dims:
-            logger.warning(
-                "Collection '%s' has %d dims but config expects %d — recreating.",
-                name, stored, dims,
-            )
-            client.delete_collection(name)
-        else:
-            logger.info("Qdrant collection '%s' OK (%d dims).", name, stored)
-            return
-
-    client.create_collection(
-        collection_name=name,
-        vectors_config=qmodels.VectorParams(size=dims, distance=qmodels.Distance.COSINE),
-    )
-    try:
-        client.create_payload_index(
-            collection_name=name,
-            field_name="doc_id",
-            field_schema=qmodels.PayloadSchemaType.KEYWORD,
+        _client = chromadb.PersistentClient(
+            path=str(db_path),
+            settings=ChromaSettings(anonymized_telemetry=False),
         )
-    except Exception as exc:
-        logger.warning("Could not create payload index for '%s': %s", name, exc)
-    logger.info("Created Qdrant collection: %s (%d dims)", name, dims)
-
-
-def _ensure_collections_sync() -> None:
-    client = get_client()
-    _ensure_collection(client, settings.qdrant_collection_text, settings.embedding_dims)
-    _ensure_collection(client, settings.qdrant_collection_image_visual, settings.clip_dims)
+        _collection = _client.get_or_create_collection(
+            name=settings.chroma_collection,
+            metadata={"hnsw:space": "cosine"},
+        )
+        logger.info(
+            "ChromaDB colección '%s' lista en: %s",
+            settings.chroma_collection, db_path,
+        )
+    return _collection
 
 
 async def ensure_collections() -> None:
-    await asyncio.to_thread(_ensure_collections_sync)
+    """Inicializa la colección ChromaDB al arrancar el servidor."""
+    await asyncio.to_thread(_get_collection)
 
 
-# ── Text collection (texto + descripciones de imagen, MiniLM 384 dims) ─────
-async def upsert_chunk(
-    doc_id: str,
-    chunk_index: int,
-    vector: list[float],
-    payload: dict,
-) -> None:
-    if len(vector) != settings.embedding_dims:
-        raise ValueError(
-            f"Vector dim mismatch: got {len(vector)}, collection expects "
-            f"{settings.embedding_dims}. Delete backend/data/qdrant and restart."
-        )
+async def upsert_chunks_batch(doc_id: str, chunks_data: list[dict]) -> None:
+    """Inserta o actualiza chunks en ChromaDB.
 
-    def _upsert() -> None:
-        client = get_client()
-        point = qmodels.PointStruct(
-            id=_point_id(doc_id, chunk_index),
-            vector=vector,
-            payload={"doc_id": doc_id, **payload},
-        )
-        client.upsert(
-            collection_name=settings.qdrant_collection_text,
-            points=[point],
-        )
+    Cada item en chunks_data debe tener:
+      chunk_index (int), vector (list[float]), payload (dict).
 
-    await asyncio.to_thread(_upsert)
+    El payload debe contener: content, filename, page_number, chunk_type
+    y opcionalmente: image_id, caption, ocr_text, fig_caption.
 
-
-async def upsert_chunks_batch(
-    doc_id: str,
-    chunks_data: list[dict],
-) -> None:
-    """Upsert all chunks in a single Qdrant call — faster than N individual upserts.
-
-    Each item in chunks_data must have keys: chunk_index (int), vector (list[float]), payload (dict).
+    ChromaDB requiere IDs string y metadata sin valores None.
     """
     if not chunks_data:
         return
 
     def _upsert() -> None:
-        client = get_client()
-        points = []
+        col = _get_collection()
+        ids = []
+        embeddings = []
+        documents = []
+        metadatas = []
+
         for item in chunks_data:
-            vector = item["vector"]
-            if len(vector) != settings.embedding_dims:
-                raise ValueError(
-                    f"Vector dim mismatch: got {len(vector)}, collection expects "
-                    f"{settings.embedding_dims}."
-                )
-            points.append(qmodels.PointStruct(
-                id=_point_id(doc_id, item["chunk_index"]),
-                vector=vector,
-                payload={"doc_id": doc_id, **item["payload"]},
-            ))
-        client.upsert(
-            collection_name=settings.qdrant_collection_text,
-            points=points,
+            chunk_id = f"{doc_id}_{item['chunk_index']}"
+            ids.append(chunk_id)
+            embeddings.append(item["vector"])
+            payload = item["payload"]
+            documents.append(payload.get("content", ""))
+
+            # ChromaDB rechaza None en metadata — usar valores por defecto seguros
+            page_num = payload.get("page_number")
+            metadatas.append({
+                "doc_id": doc_id,
+                "filename": payload.get("filename") or "",
+                "page_number": page_num if page_num is not None else -1,
+                "chunk_type": payload.get("chunk_type") or "text",
+                "image_id": payload.get("image_id") or "",
+                "image_ids": payload.get("image_ids") or "",
+                "caption": payload.get("caption") or "",
+                "ocr_text": payload.get("ocr_text") or "",
+                "fig_caption": payload.get("fig_caption") or "",
+            })
+
+        col.upsert(
+            ids=ids,
+            embeddings=embeddings,
+            documents=documents,
+            metadatas=metadatas,
         )
 
     await asyncio.to_thread(_upsert)
@@ -157,116 +95,75 @@ async def search(
     query_vector: list[float],
     top_k: int,
     doc_ids: list[str] | None = None,
-) -> list[qmodels.ScoredPoint]:
-    def _search() -> list[qmodels.ScoredPoint]:
-        client = get_client()
-        query_filter = None
-        if doc_ids:
-            query_filter = qmodels.Filter(
-                must=[
-                    qmodels.FieldCondition(
-                        key="doc_id",
-                        match=qmodels.MatchAny(any=doc_ids),
-                    )
-                ]
-            )
-        result = client.query_points(
-            collection_name=settings.qdrant_collection_text,
-            query=query_vector,
-            limit=top_k,
-            query_filter=query_filter,
-            with_payload=True,
-        )
-        return result.points
+) -> list[dict]:
+    """Busca los top_k chunks más similares.
 
-    return await asyncio.to_thread(_search)
+    Retorna lista de dicts con keys:
+      score, content, doc_id, filename, page_number,
+      chunk_type, image_id, caption, ocr_text, fig_caption.
 
+    score = similitud coseno en [0, 1] (1 = idéntico).
+    """
+    def _search() -> list[dict]:
+        col = _get_collection()
 
-# ── Visual collection (imágenes embebidas con CLIP, 512 dims) ──────────────
-async def upsert_image_visual(
-    doc_id: str,
-    image_id: str,
-    vector: list[float],
-    payload: dict,
-) -> None:
-    if len(vector) != settings.clip_dims:
-        raise ValueError(
-            f"Visual vector dim mismatch: got {len(vector)}, collection expects "
-            f"{settings.clip_dims}."
-        )
-
-    def _upsert() -> None:
-        client = get_client()
-        point = qmodels.PointStruct(
-            id=_image_point_id(image_id),
-            vector=vector,
-            payload={"doc_id": doc_id, "image_id": image_id, **payload},
-        )
-        client.upsert(
-            collection_name=settings.qdrant_collection_image_visual,
-            points=[point],
-        )
-
-    await asyncio.to_thread(_upsert)
-
-
-async def search_image_visual(
-    query_vector: list[float],
-    top_k: int,
-    doc_ids: list[str] | None = None,
-) -> list[qmodels.ScoredPoint]:
-    def _search() -> list[qmodels.ScoredPoint]:
-        client = get_client()
-        query_filter = None
-        if doc_ids:
-            query_filter = qmodels.Filter(
-                must=[
-                    qmodels.FieldCondition(
-                        key="doc_id",
-                        match=qmodels.MatchAny(any=doc_ids),
-                    )
-                ]
-            )
-        try:
-            result = client.query_points(
-                collection_name=settings.qdrant_collection_image_visual,
-                query=query_vector,
-                limit=top_k,
-                query_filter=query_filter,
-                with_payload=True,
-            )
-            return result.points
-        except Exception as exc:
-            # Empty collection or not yet created — degrade gracefully
-            logger.debug("Visual search returned no points: %s", exc)
+        # Guardia: ChromaDB lanza error si n_results > total de items
+        total = col.count()
+        if total == 0:
             return []
+        actual_k = min(top_k, total)
+
+        where = None
+        if doc_ids:
+            if len(doc_ids) == 1:
+                where = {"doc_id": doc_ids[0]}
+            else:
+                where = {"doc_id": {"$in": doc_ids}}
+
+        results = col.query(
+            query_embeddings=[query_vector],
+            n_results=actual_k,
+            where=where,
+            include=["metadatas", "documents", "distances"],
+        )
+
+        hits = []
+        ids_list = results["ids"][0]
+        distances = results["distances"][0]
+        metas = results["metadatas"][0]
+        docs = results["documents"][0]
+
+        for i, _chroma_id in enumerate(ids_list):
+            meta = metas[i]
+            # Distancia coseno ChromaDB ∈ [0,2]: 0=idéntico, 2=opuesto
+            score = 1.0 - (distances[i] / 2.0)
+            page_num = meta.get("page_number", -1)
+            hits.append({
+                "score": score,
+                "content": docs[i],
+                "doc_id": meta.get("doc_id", ""),
+                "filename": meta.get("filename", ""),
+                "page_number": page_num if page_num != -1 else None,
+                "chunk_type": meta.get("chunk_type", "text"),
+                "image_id": meta.get("image_id") or None,
+                "image_ids": meta.get("image_ids") or "",
+                "caption": meta.get("caption") or "",
+                "ocr_text": meta.get("ocr_text") or "",
+                "fig_caption": meta.get("fig_caption") or "",
+            })
+        return hits
 
     return await asyncio.to_thread(_search)
 
 
 async def delete_by_doc_id(doc_id: str) -> None:
     def _delete() -> None:
-        client = get_client()
-        doc_filter = qmodels.Filter(
-            must=[
-                qmodels.FieldCondition(
-                    key="doc_id",
-                    match=qmodels.MatchValue(value=doc_id),
-                )
-            ]
-        )
-        for collection in (
-            settings.qdrant_collection_text,
-            settings.qdrant_collection_image_visual,
-        ):
-            try:
-                client.delete(
-                    collection_name=collection,
-                    points_selector=qmodels.FilterSelector(filter=doc_filter),
-                )
-            except Exception as exc:
-                logger.warning("Failed to delete points from '%s': %s", collection, exc)
-        logger.info("Deleted Qdrant points for doc_id=%s", doc_id)
+        col = _get_collection()
+        try:
+            col.delete(where={"doc_id": doc_id})
+            logger.info("ChromaDB: eliminados vectores para doc_id=%s", doc_id)
+        except Exception as exc:
+            logger.warning("ChromaDB delete falló para doc_id=%s: %s", doc_id, exc)
 
     await asyncio.to_thread(_delete)
 
@@ -274,7 +171,7 @@ async def delete_by_doc_id(doc_id: str) -> None:
 async def check_health() -> bool:
     def _check() -> bool:
         try:
-            get_client().get_collections()
+            _get_collection().count()
             return True
         except Exception:
             return False

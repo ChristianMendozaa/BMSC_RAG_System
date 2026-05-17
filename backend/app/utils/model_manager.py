@@ -1,171 +1,119 @@
 """
-Downloads and loads all HuggingFace models at startup.
-No token required — all models are public.
+Loads models from local cache at startup.
+Run `python download_models.py` first to download them.
 
-Download order (shown with tqdm progress bars):
-  [1/4] LLM      bartowski/Qwen2.5-1.5B-Instruct-GGUF       (~1 GB)
-  [2/4] Embed    paraphrase-multilingual-MiniLM-L12-v2       (~500 MB)
-  [3/4] BLIP     Salesforce/blip-image-captioning-base       (~450 MB)
-  [4/4] CLIP     clip-ViT-B-32-multilingual-v1               (~600 MB)
-
-OCR uses pytesseract (system Tesseract binary) — no model download needed.
-On subsequent starts, cached files are found instantly — no re-download.
+All LLM inference must go through inference_queue (app.utils.inference_queue).
 """
 
-import asyncio
 import logging
 import os
 from pathlib import Path
 from typing import Any
+import asyncio
 
 logger = logging.getLogger(__name__)
 
-# Module-level singletons — loaded once at startup, read-only afterwards
 _llm: Any = None
 _embedder: Any = None
-_blip_processor: Any = None
-_blip_model: Any = None
-_clip_text: Any = None
-_clip_image_model: Any = None
-_clip_image_processor: Any = None
 
 
 def _load_all_sync() -> None:
-    global _llm, _embedder, _blip_processor, _blip_model, _clip_text, _clip_image_model, _clip_image_processor
+    global _llm, _embedder
 
     from app.config import settings
 
     cache = Path(settings.hf_cache_dir)
-    cache.mkdir(parents=True, exist_ok=True)
-
-    # Avoid spurious HF symlink warnings on Windows
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
     from huggingface_hub import hf_hub_download
-
-    # ── 1. LLM (GGUF via llama-cpp-python) ───────────────────────────────────
     from llama_cpp import Llama
 
     logger.info("=" * 60)
-    logger.info("[1/4] LLM — %s / %s", settings.llm_gguf_repo, settings.llm_gguf_filename)
-    logger.info("      Downloading / checking cache (tqdm bar below)...")
+    logger.info("[1/2] LLM+Visión — %s", settings.llm_gguf_repo)
 
-    gguf_path = hf_hub_download(
-        repo_id=settings.llm_gguf_repo,
-        filename=settings.llm_gguf_filename,
-        cache_dir=str(cache),
+    try:
+        gguf_path = hf_hub_download(
+            repo_id=settings.llm_gguf_repo,
+            filename=settings.llm_gguf_filename,
+            cache_dir=str(cache),
+            local_files_only=True,
+        )
+        mmproj_path = hf_hub_download(
+            repo_id=settings.llm_gguf_repo,
+            filename=settings.llm_mmproj_filename,
+            cache_dir=str(cache),
+            local_files_only=True,
+        )
+    except Exception:
+        raise RuntimeError(
+            "Modelos no encontrados en caché local. "
+            "Ejecuta primero: python download_models.py"
+        )
+
+    logger.info("      GGUF:   %s", gguf_path)
+    logger.info("      mmproj: %s", mmproj_path)
+
+    total_cores = os.cpu_count() or 4
+    n_threads = settings.llm_n_threads or max(1, total_cores - 2)
+    logger.info(
+        "      Hilos de inferencia: %d (%d cores totales, 2 reservados al SO)",
+        n_threads, total_cores,
     )
-
-    n_threads = settings.llm_n_threads or (os.cpu_count() or 4)
-    logger.info("      Loading into RAM with %d threads...", n_threads)
 
     _llm = Llama(
         model_path=gguf_path,
+        clip_model_path=mmproj_path,
         n_ctx=settings.llm_n_ctx,
+        n_batch=512,
         n_threads=n_threads,
+        n_threads_batch=n_threads,
+        use_mmap=False,
+        use_mlock=True,
         verbose=False,
     )
-    logger.info("      LLM ready. (%s)", settings.llm_gguf_filename)
+    logger.info("      Gemma-4 (LLM + visión) listo.")
 
-    # ── 2. Text embeddings (sentence-transformers) ────────────────────────────
     from sentence_transformers import SentenceTransformer
 
-    logger.info("[2/4] Embeddings — %s", settings.embed_model_id)
-    logger.info("      Downloading / checking cache...")
+    logger.info("[2/2] Embeddings — %s", settings.embed_model_id)
 
-    _embedder = SentenceTransformer(
-        settings.embed_model_id,
-        cache_folder=str(cache),
-    )
-    logger.info("      Embeddings ready.")
+    embed_path = cache / "bge-m3"
+    if not (embed_path / "config.json").exists():
+        raise RuntimeError(
+            "Modelo de embeddings no encontrado en caché local. "
+            "Ejecuta primero: python download_models.py"
+        )
 
-    # ── 3. BLIP image captioning (fast CPU-friendly transformer) ─────────────
-    from transformers import BlipForConditionalGeneration, BlipProcessor
+    _embedder = SentenceTransformer(str(embed_path), device="cpu")
 
-    logger.info("[3/4] BLIP — %s", settings.blip_model_id)
-    logger.info("      Downloading / checking cache...")
-
-    _blip_processor = BlipProcessor.from_pretrained(
-        settings.blip_model_id,
-        cache_dir=str(cache),
-    )
-    _blip_model = BlipForConditionalGeneration.from_pretrained(
-        settings.blip_model_id,
-        cache_dir=str(cache),
-    )
-    _blip_model.eval()
-    logger.info("      BLIP ready.")
-
-    # ── 4. CLIP multilingual (visual ↔ text in shared space) ──────────────────
-    from transformers import CLIPModel, CLIPProcessor
-
-    logger.info("[4/4] CLIP multilingual — text: %s, image: %s",
-                settings.clip_model_id, settings.clip_image_model_id)
-    logger.info("      Downloading / checking cache...")
-
-    _clip_text = SentenceTransformer(
-        settings.clip_model_id,
-        cache_folder=str(cache),
-    )
-    _clip_image_processor = CLIPProcessor.from_pretrained(
-        settings.clip_image_model_id,
-        cache_dir=str(cache),
-    )
-    _clip_image_model = CLIPModel.from_pretrained(
-        settings.clip_image_model_id,
-        cache_dir=str(cache),
-    )
-    _clip_image_model.eval()
-    logger.info("      CLIP ready.")
-
+    test_vec = _embedder.encode("test", normalize_embeddings=True)
+    actual_dim = len(test_vec)
+    if actual_dim != settings.embedding_dims:
+        raise RuntimeError(
+            f"BGE-M3 produjo vectores de {actual_dim} dims pero config espera "
+            f"{settings.embedding_dims}."
+        )
+    logger.info("      BGE-M3 listo (%d dims).", actual_dim)
     logger.info("=" * 60)
-    logger.info("All models loaded. Server is starting...")
-    logger.info("      (OCR uses pytesseract — no model download needed)")
+    logger.info("Todos los modelos cargados.")
     logger.info("=" * 60)
 
 
 async def download_and_load_all() -> None:
-    """Async entry point — runs blocking model loading in a thread pool."""
     await asyncio.to_thread(_load_all_sync)
 
 
 def get_llm() -> Any:
     if _llm is None:
-        raise RuntimeError("LLM not loaded — call download_and_load_all() first")
+        raise RuntimeError("LLM no cargado — ejecuta python download_models.py primero")
     return _llm
 
 
 def get_embedder() -> Any:
     if _embedder is None:
-        raise RuntimeError("Embedder not loaded — call download_and_load_all() first")
+        raise RuntimeError("Embedder no cargado — ejecuta python download_models.py primero")
     return _embedder
 
 
-def get_blip() -> tuple[Any, Any]:
-    """Returns (processor, model) for BLIP image captioning."""
-    if _blip_processor is None or _blip_model is None:
-        raise RuntimeError("BLIP not loaded — call download_and_load_all() first")
-    return _blip_processor, _blip_model
-
-
-def get_clip_text() -> Any:
-    if _clip_text is None:
-        raise RuntimeError("CLIP text encoder not loaded — call download_and_load_all() first")
-    return _clip_text
-
-
-def get_clip_image() -> tuple[Any, Any]:
-    """Returns (processor, model) for the OpenAI CLIP vision encoder."""
-    if _clip_image_model is None or _clip_image_processor is None:
-        raise RuntimeError("CLIP image encoder not loaded — call download_and_load_all() first")
-    return _clip_image_processor, _clip_image_model
-
-
 def models_loaded() -> bool:
-    return all(
-        x is not None
-        for x in (
-            _llm, _embedder, _blip_processor, _blip_model,
-            _clip_text, _clip_image_model, _clip_image_processor,
-        )
-    )
+    return _llm is not None and _embedder is not None

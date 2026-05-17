@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -6,9 +8,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.cache import response_cache
 from app.config import settings
-from app.database import get_db
-from app.models import Document, DocumentImage
+from app.db.session import get_pg_db as get_db
+from app.db.models.rag_document import RagDocument as Document
+from app.db.models.rag_document_image import RagDocumentImage as DocumentImage
 from app.schemas import DocumentDetail, DocumentSummary, DocumentsListResponse
 from app.services import file_storage, vector_store
 from app.services.ingest_pipeline import cancel_pipeline
@@ -47,7 +51,7 @@ async def list_documents(
 async def get_document(doc_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Document)
-        .where(Document.id == doc_id)
+        .where(Document.id == uuid.UUID(doc_id))
         .options(
             selectinload(Document.chunks),
             selectinload(Document.images),
@@ -61,17 +65,20 @@ async def get_document(doc_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.delete("/documents/{doc_id}", status_code=204)
 async def delete_document(doc_id: str, db: AsyncSession = Depends(get_db)):
-    doc = await db.get(Document, doc_id)
+    doc = await db.get(Document, uuid.UUID(doc_id))
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    # Signal any in-flight ingestion pipeline to abort at its next checkpoint
     cancel_pipeline(doc_id)
+
+    n = await asyncio.to_thread(response_cache.invalidate_by_doc_id, doc_id)
+    if n:
+        logger.info("Eliminado doc_id=%s: invalidadas %d respuestas cacheadas", doc_id, n)
 
     try:
         await vector_store.delete_by_doc_id(doc_id)
     except Exception as exc:
-        logger.warning("doc_id=%s: Qdrant delete partial failure: %s", doc_id, exc)
+        logger.warning("doc_id=%s: ChromaDB delete partial failure: %s", doc_id, exc)
 
     try:
         await file_storage.delete_objects_with_prefix(
@@ -81,17 +88,57 @@ async def delete_document(doc_id: str, db: AsyncSession = Depends(get_db)):
             settings.minio_bucket_images, f"{doc_id}/"
         )
     except Exception as exc:
-        logger.warning("doc_id=%s: MinIO delete partial failure: %s", doc_id, exc)
+        logger.warning("doc_id=%s: storage delete partial failure: %s", doc_id, exc)
 
     await db.delete(doc)
     await db.commit()
     logger.info("Deleted document doc_id=%s", doc_id)
 
 
+@router.get("/documents/{doc_id}/download")
+async def download_document(doc_id: str, dl: bool = False, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Document).where(Document.id == uuid.UUID(doc_id)))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not doc.minio_path:
+        raise HTTPException(status_code=404, detail="File not available for download")
+
+    try:
+        data = await file_storage.get_object_bytes(settings.minio_bucket_documents, doc.minio_path)
+    except Exception as exc:
+        logger.error("Failed to retrieve document %s: %s", doc_id, exc)
+        raise HTTPException(status_code=502, detail="Failed to retrieve file from storage")
+
+    ext = doc.original_filename.rsplit(".", 1)[-1].lower() if "." in doc.original_filename else ""
+    content_type_map = {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "txt": "text/plain",
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+    }
+    content_type = content_type_map.get(ext, "application/octet-stream")
+    safe_filename = doc.original_filename.replace('"', "_")
+    disposition = "attachment" if dl else "inline"
+
+    return StreamingResponse(
+        iter([data]),
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{safe_filename}"',
+            "Cache-Control": "private, max-age=3600",
+        },
+    )
+
+
 @router.get("/images/{image_id}")
 async def get_image(image_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(DocumentImage).where(DocumentImage.id == image_id)
+        select(DocumentImage).where(DocumentImage.id == uuid.UUID(image_id))
     )
     img = result.scalar_one_or_none()
     if not img:

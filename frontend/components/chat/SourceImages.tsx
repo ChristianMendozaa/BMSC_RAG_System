@@ -12,52 +12,67 @@ export default function SourceImages({ sources }: Props) {
   if (imageSources.length === 0) return null;
 
   return (
-    <div className="mt-3 flex flex-wrap gap-3">
-      {imageSources.map((source) => {
-        const label = `${source.filename}${source.page ? ` · p.${source.page}` : ''}`;
-        return (
-          <a
-            key={source.image_id}
-            href={getImageUrl(source.image_id!)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex flex-col gap-1 shrink-0 group"
-          >
-            <div
-              className="w-44 h-44 rounded-lg overflow-hidden transition-colors"
-              style={{
-                border: '1px solid var(--border-default)',
-                background: 'var(--bg-surface)',
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--gold-bright)';
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border-default)';
-              }}
+    <div className="mt-4">
+      <p
+        className="text-xs font-medium mb-2 uppercase tracking-wide"
+        style={{ color: 'var(--text-muted)' }}
+      >
+        Imágenes de referencia
+      </p>
+      <div
+        className="grid gap-3"
+        style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}
+      >
+        {imageSources.map((source) => {
+          const label = `${source.filename}${source.page ? ` · p.${source.page}` : ''}`;
+          return (
+            <a
+              key={source.image_id}
+              href={getImageUrl(source.image_id!)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex flex-col gap-1.5 group"
             >
-              <img
-                src={getImageUrl(source.image_id!)}
-                alt={label}
-                className="w-full h-full object-contain"
-                style={{ background: 'var(--bg-elevated)' }}
-              />
-            </div>
-            <p
-              className="text-xs truncate max-w-[11rem] transition-colors"
-              style={{ color: 'var(--text-muted)' }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLElement).style.color = 'var(--gold-bright)';
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)';
-              }}
-            >
-              {label}
-            </p>
-          </a>
-        );
-      })}
+              <div
+                className="w-full rounded-lg overflow-hidden transition-all"
+                style={{
+                  border: '1px solid var(--border-default)',
+                  background: 'var(--bg-surface)',
+                  aspectRatio: '4 / 3',
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--gold-bright)';
+                  (e.currentTarget as HTMLDivElement).style.boxShadow =
+                    '0 0 0 2px var(--gold-subtle)';
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border-default)';
+                  (e.currentTarget as HTMLDivElement).style.boxShadow = 'none';
+                }}
+              >
+                <img
+                  src={getImageUrl(source.image_id!)}
+                  alt={label}
+                  className="w-full h-full object-contain"
+                  style={{ background: 'var(--bg-elevated)' }}
+                />
+              </div>
+              <p
+                className="text-xs truncate transition-colors"
+                style={{ color: 'var(--text-muted)' }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLElement).style.color = 'var(--gold-bright)';
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)';
+                }}
+              >
+                {label}
+              </p>
+            </a>
+          );
+        })}
+      </div>
     </div>
   );
 }

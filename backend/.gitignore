@@ -39,3 +39,9 @@ Thumbs.db
 
 # Claude
 .claude
+
+# VSCode
+.vscode/
+
+# Cache
+cache/

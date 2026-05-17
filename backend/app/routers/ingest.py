@@ -1,11 +1,14 @@
+import asyncio
 import logging
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, Form
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
-from app.models import Document
+from app.cache import response_cache
+from app.db.session import get_pg_db as get_db
+from app.db.models.rag_document import RagDocument as Document
 from app.schemas import DocumentStatusOut, IngestResponse
 from app.services.ingest_pipeline import ACCEPTED_EXTENSIONS, run_pipeline
 
@@ -38,15 +41,31 @@ async def ingest_document(
     if file_size > MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail="File too large (max 200 MB)")
 
-    doc_id = str(uuid.uuid4())
+    # Detectar re-ingesta: invalidar caché de respuestas para docs anteriores con mismo nombre
+    existing = await db.execute(
+        select(Document).where(
+            Document.filename == filename,
+            Document.status == "ready",
+        )
+    )
+    for old_doc in existing.scalars().all():
+        n = await asyncio.to_thread(response_cache.invalidate_by_doc_id, str(old_doc.id))
+        if n:
+            logger.info(
+                "Re-ingesta detectada: invalidadas %d respuestas cacheadas de doc_id=%s (%s)",
+                n, old_doc.id, filename,
+            )
+
+    doc_uuid = uuid.uuid4()
+    doc_id = str(doc_uuid)
     doc = Document(
-        id=doc_id,
+        id=doc_uuid,
         filename=filename,
         original_filename=filename,
         file_type=ext.lstrip("."),
         file_size=file_size,
         status="pending",
-        role_id=role_id,
+        role_id=uuid.UUID(role_id) if role_id else None,
     )
     db.add(doc)
     await db.commit()
@@ -59,11 +78,11 @@ async def ingest_document(
 
 @router.get("/documents/{doc_id}/status", response_model=DocumentStatusOut)
 async def get_document_status(doc_id: str, db: AsyncSession = Depends(get_db)):
-    doc = await db.get(Document, doc_id)
+    doc = await db.get(Document, uuid.UUID(doc_id))
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     return DocumentStatusOut(
-        id=doc.id,
+        id=str(doc.id),
         status=doc.status,
         error_message=doc.error_message,
         chunk_count=doc.chunk_count,

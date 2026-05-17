@@ -8,13 +8,16 @@ interface Props {
   onChange: (value: string) => void;
   onSubmit: (text: string) => void;
   isStreaming: boolean;
+  disabled?: boolean;
 }
 
-export default function MessageInput({ value, onChange, onSubmit, isStreaming }: Props) {
+export default function MessageInput({ value, onChange, onSubmit, isStreaming, disabled = false }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const isDisabled = isStreaming || disabled;
+
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey && !isStreaming) {
+    if (e.key === 'Enter' && !e.shiftKey && !isDisabled) {
       e.preventDefault();
       const trimmed = value.trim();
       if (trimmed) {
@@ -25,34 +28,20 @@ export default function MessageInput({ value, onChange, onSubmit, isStreaming }:
 
   const handleSubmit = () => {
     const trimmed = value.trim();
-    if (trimmed && !isStreaming) {
+    if (trimmed && !isDisabled) {
       onSubmit(trimmed);
     }
   };
 
   return (
-    <div
-      className="flex items-end gap-2 rounded-2xl px-4 py-2 transition-colors"
-      style={{
-        background: 'var(--bg-elevated)',
-        border: '1px solid var(--border-default)',
-      }}
-      onFocus={(e) => {
-        (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--gold-bright)';
-      }}
-      onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-          (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border-default)';
-        }
-      }}
-    >
+    <div className="flex items-end gap-2">
       <textarea
         ref={textareaRef}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={handleKeyDown}
-        disabled={isStreaming}
-        placeholder="Escribe tu pregunta aquí..."
+        disabled={isDisabled}
+        placeholder={disabled ? 'Selecciona una colección para comenzar...' : 'Escribe tu pregunta aquí...'}
         rows={1}
         className="flex-1 resize-none bg-transparent text-sm outline-none min-h-[36px] max-h-36 py-1.5 disabled:opacity-60"
         style={{
@@ -68,7 +57,7 @@ export default function MessageInput({ value, onChange, onSubmit, isStreaming }:
       />
       <button
         onClick={handleSubmit}
-        disabled={!value.trim() || isStreaming}
+        disabled={!value.trim() || isDisabled}
         className="p-2 rounded-xl transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
         style={{
           background: 'var(--gold-bright)',

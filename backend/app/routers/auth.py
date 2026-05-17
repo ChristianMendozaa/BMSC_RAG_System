@@ -1,39 +1,74 @@
-from datetime import timedelta
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
+import uuid
+from datetime import datetime, timezone
 
-from app.database import get_db
-from app.models import User, Role
-from app.schemas import Token, UserCreate, UserOut
-from app.utils.security import verify_password, get_password_hash, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
-from app.dependencies import get_current_active_user
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.security import create_access_token, decode_token, verify_password
+from app.db.models.revoked_token import RevokedToken
+from app.db.models.user import PGUser
+from app.db.schemas.auth import LoginRequest, LoginResponse, MeResponse, UserInfo
+from app.db.session import get_pg_db
+from app.dependencies import get_current_user, oauth2_scheme
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-@router.post("/token", response_model=Token)
-async def login_for_access_token(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    db: AsyncSession = Depends(get_db)
+
+@router.post("/login", response_model=LoginResponse)
+async def login(
+    body: LoginRequest,
+    db: AsyncSession = Depends(get_pg_db),
 ):
-    stmt = select(User).where(User.email == form_data.username)
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
-    
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    user = await db.scalar(
+        select(PGUser).where(PGUser.username == body.username)
+    )
+
+    if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Credenciales incorrectas",
         )
-    
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.email}, expires_delta=access_token_expires
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usuario inactivo",
+        )
 
-@router.get("/me", response_model=UserOut)
-async def read_users_me(current_user: User = Depends(get_current_active_user)):
+    jti = uuid.uuid4()
+    token = create_access_token(user_id=user.id, jti=jti)
+    return LoginResponse(
+        access_token=token,
+        token_type="bearer",
+        user=UserInfo.model_validate(user),
+    )
+
+
+@router.post("/logout", status_code=204)
+async def logout(
+    token: str = Depends(oauth2_scheme),
+    current_user: PGUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_pg_db),
+):
+    from jose import JWTError
+
+    try:
+        payload = decode_token(token)
+        jti = uuid.UUID(payload["jti"])
+        exp_ts = payload["exp"]
+        expires_at = datetime.fromtimestamp(exp_ts, tz=timezone.utc)
+    except (JWTError, KeyError, ValueError):
+        return
+
+    revoked = RevokedToken(
+        jti=jti,
+        user_id=current_user.id,
+        expires_at=expires_at,
+    )
+    db.add(revoked)
+    await db.commit()
+
+
+@router.get("/me", response_model=MeResponse)
+async def me(current_user: PGUser = Depends(get_current_user)):
     return current_user

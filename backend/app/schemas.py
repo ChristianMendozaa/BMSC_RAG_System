@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class DocumentSummary(BaseModel):
@@ -19,6 +19,11 @@ class DocumentSummary(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @field_validator("id", mode="before")
+    @classmethod
+    def coerce_uuid(cls, v):
+        return str(v)
+
 
 class ChunkOut(BaseModel):
     id: str
@@ -29,6 +34,11 @@ class ChunkOut(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @field_validator("id", mode="before")
+    @classmethod
+    def coerce_uuid(cls, v):
+        return str(v)
+
 
 class DocumentImageOut(BaseModel):
     id: str
@@ -38,6 +48,11 @@ class DocumentImageOut(BaseModel):
     description: str | None
 
     model_config = {"from_attributes": True}
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def coerce_uuid(cls, v):
+        return str(v)
 
 
 class DocumentDetail(DocumentSummary):
@@ -51,6 +66,11 @@ class DocumentStatusOut(BaseModel):
     error_message: str | None
     chunk_count: int
     image_count: int
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def coerce_uuid(cls, v):
+        return str(v)
 
 
 class IngestResponse(BaseModel):
@@ -78,6 +98,7 @@ class Source(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     conversation_id: str | None = None
+    collection_id: str | None = None
     document_ids: list[str] | None = None
 
 

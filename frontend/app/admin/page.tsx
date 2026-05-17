@@ -1,183 +1,1522 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { 
-  getRoles, createRole, getUsers, createUser, getIncidents, createIncident, uploadDocument 
+import * as Dialog from '@radix-ui/react-dialog';
+import {
+  Users, Shield, FolderOpen, FileText, Plus,
+  ChevronDown, ChevronUp, Download, Trash2, Upload,
+  CheckCircle2, Circle, Loader2, AlertCircle, RefreshCw, X, UserPlus,
+} from 'lucide-react';
+import {
+  getRoles, createRole, updateRole, deleteRole,
+  getUsers, createUser, deactivateUser,
+  getCollections, createCollection,
+  getCollectionRolePerms, updateCollectionRolePerm,
+  getCollectionUserPerms, updateCollectionUserPerm, deleteCollectionUserPerm,
+  getPgDocuments, uploadToCollection, downloadDocument, deletePgDocument,
+  getDocumentUserPerms, updateDocumentUserPerm, deleteDocumentUserPerm,
 } from '@/lib/api';
-import { LogOut } from 'lucide-react';
+import type {
+  RoleInfo, UserOut, CollectionOut, RolePermEntry, UserPermEntry, PgDocumentOut, DocUserPermEntry,
+} from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
+import ConfirmModal from '@/components/ui/ConfirmModal';
 
-export default function AdminPage() {
-  const router = useRouter();
-  const [activeTab, setActiveTab] = useState('usuarios');
-  const [roles, setRoles] = useState<any[]>([]);
-  const [users, setUsers] = useState<any[]>([]);
-  const [incidents, setIncidents] = useState<any[]>([]);
-  
-  const [newRole, setNewRole] = useState('');
-  const [newUser, setNewUser] = useState({ email: '', password: '', role_id: '' });
-  const [newIncident, setNewIncident] = useState({ description: '', solution: '', resolved_by: '' });
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadRoleId, setUploadRoleId] = useState('');
-  const [uploading, setUploading] = useState(false);
+// ── helpers ────────────────────────────────────────────────────────────────
 
-  const fetchRoles = async () => setRoles(await getRoles());
-  const fetchUsers = async () => setUsers(await getUsers());
-  const fetchIncidents = async () => setIncidents(await getIncidents());
+function initials(name: string) {
+  return name.slice(0, 2).toUpperCase();
+}
 
-  useEffect(() => {
-    const role = localStorage.getItem('role');
-    if (role !== 'admin') {
-      router.push('/login');
-    } else {
-      fetchRoles();
-      fetchUsers();
-      fetchIncidents();
-    }
-  }, [router]);
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
-  const handleCreateRole = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await createRole(newRole);
-    setNewRole('');
-    fetchRoles();
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleDateString('es-BO', {
+    day: '2-digit', month: 'short', year: 'numeric',
+  });
+}
+
+const RAG_LABEL: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
+  pending:         { label: 'Pendiente',   color: '#A67B2A', icon: <Circle size={11} /> },
+  indexing_images: { label: 'Procesando',  color: '#2563EB', icon: <Loader2 size={11} className="animate-spin" /> },
+  ready:           { label: 'Listo',       color: '#2D7A4F', icon: <CheckCircle2 size={11} /> },
+  error:           { label: 'Error',       color: '#8B2233', icon: <AlertCircle size={11} /> },
+  sin_rag:         { label: 'Sin RAG',     color: '#4A6B58', icon: <Circle size={11} /> },
+};
+
+const PERM_LABELS = [
+  { key: 'can_manage_users' as keyof RoleInfo,        label: 'Gestionar usuarios' },
+  { key: 'can_manage_collections' as keyof RoleInfo,  label: 'Gestionar colecciones' },
+  { key: 'can_upload_documents' as keyof RoleInfo,    label: 'Subir documentos' },
+  { key: 'can_delete_documents' as keyof RoleInfo,    label: 'Eliminar documentos' },
+];
+
+// ── sub-components ─────────────────────────────────────────────────────────
+
+function NavItem({
+  id, label, icon: Icon, active, onClick,
+}: { id: string; label: string; icon: React.ElementType; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all"
+      style={{
+        background: active ? 'var(--gold-subtle)' : 'transparent',
+        color: active ? 'var(--gold-bright)' : 'var(--text-secondary)',
+        borderLeft: active ? '2px solid var(--gold-bright)' : '2px solid transparent',
+      }}
+    >
+      <Icon size={16} />
+      {label}
+    </button>
+  );
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <h2
+      className="text-lg font-semibold mb-5"
+      style={{ color: 'var(--gold-bright)', fontFamily: 'Playfair Display, serif' }}
+    >
+      {children}
+    </h2>
+  );
+}
+
+function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <span
+      className="text-xs px-2 py-0.5 rounded-full"
+      style={{
+        background: ok ? 'rgba(45,122,79,0.2)' : 'rgba(100,100,100,0.15)',
+        color: ok ? '#4ade80' : '#6b7280',
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div
+      className={`rounded-xl border p-5 ${className}`}
+      style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={`w-full px-3 py-2 rounded-lg border text-sm transition-colors focus:outline-none focus:ring-1 focus:ring-yellow-600 ${props.className ?? ''}`}
+      style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-primary)', ...props.style }}
+    />
+  );
+}
+
+function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      {...props}
+      className={`w-full px-3 py-2 rounded-lg border text-sm focus:outline-none focus:ring-1 focus:ring-yellow-600 ${props.className ?? ''}`}
+      style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-primary)', ...props.style }}
+    />
+  );
+}
+
+function BtnPrimary({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      {...props}
+      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${props.className ?? ''}`}
+      style={{ background: 'var(--gold-muted)', color: 'var(--bg-base)', ...props.style }}
+      onMouseEnter={(e) => { if (!props.disabled) e.currentTarget.style.background = 'var(--gold-bright)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--gold-muted)'; }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function BtnGhost({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      {...props}
+      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors disabled:opacity-50 ${props.className ?? ''}`}
+      style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)', background: 'transparent', ...props.style }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Toast({ msg, type }: { msg: string; type: 'ok' | 'err' }) {
+  return (
+    <div
+      className="fixed bottom-6 right-6 px-5 py-3 rounded-xl text-sm font-medium shadow-xl z-50 animate-slide-up"
+      style={{
+        background: type === 'ok' ? 'var(--bg-elevated)' : '#3f0a14',
+        color: type === 'ok' ? 'var(--gold-bright)' : '#f87171',
+        border: `1px solid ${type === 'ok' ? 'var(--border-gold)' : '#7f1d1d'}`,
+      }}
+    >
+      {msg}
+    </div>
+  );
+}
+
+// ── SECTION: Usuarios ──────────────────────────────────────────────────────
+
+function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
+  const [users, setUsers] = useState<UserOut[]>([]);
+  const [form, setForm] = useState({ username: '', password: '', role_id: '' });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; type: 'ok' | 'err' } | null>(null);
+  const [confirmDeactivate, setConfirmDeactivate] = useState<{ id: string; username: string } | null>(null);
+
+  const flash = (text: string, type: 'ok' | 'err' = 'ok') => {
+    setMsg({ text, type });
+    setTimeout(() => setMsg(null), 3000);
   };
 
-  const handleCreateUser = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await createUser(newUser);
-    setNewUser({ email: '', password: '', role_id: '' });
-    fetchUsers();
-  };
+  const load = useCallback(async () => {
+    try { const r = await getUsers(); setUsers(r.items); } catch {}
+  }, []);
 
-  const handleCreateIncident = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await createIncident(newIncident);
-    setNewIncident({ description: '', solution: '', resolved_by: '' });
-    fetchIncidents();
-  };
+  useEffect(() => { load(); }, [load]);
 
-  const handleUploadDocument = async (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!uploadFile) return;
-    setUploading(true);
+    setBusy(true);
     try {
-      await uploadDocument(uploadFile, uploadRoleId || undefined);
-      alert('Documento subido con éxito');
-      setUploadFile(null);
-      setUploadRoleId('');
-    } catch (err) {
-      alert('Error al subir documento');
-    }
-    setUploading(false);
+      await createUser(form);
+      setForm({ username: '', password: '', role_id: '' });
+      await load();
+      flash('Usuario creado correctamente');
+    } catch (err) { flash(err instanceof Error ? err.message : 'Error', 'err'); }
+    setBusy(false);
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('role');
-    router.push('/login');
+  const handleDeactivate = (id: string, username: string) => {
+    setConfirmDeactivate({ id, username });
+  };
+
+  const doDeactivate = async () => {
+    if (!confirmDeactivate) return;
+    try {
+      await deactivateUser(confirmDeactivate.id);
+      await load();
+      flash('Usuario desactivado');
+    } catch (err) { flash(err instanceof Error ? err.message : 'Error', 'err'); }
+    setConfirmDeactivate(null);
   };
 
   return (
-    <div>
-      <div className="flex justify-between mb-6">
-        <div className="space-x-4">
-          {['usuarios', 'roles', 'documentos', 'incidencias'].map(tab => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 rounded capitalize ${activeTab === tab ? 'bg-yellow-600 text-white' : 'bg-gray-800 text-gray-300'}`}
-              style={{
-                background: activeTab === tab ? 'var(--gold-bright)' : 'var(--bg-elevated)',
-                color: activeTab === tab ? 'var(--bg-default)' : 'var(--text-secondary)'
-              }}
+    <div className="space-y-6">
+      {msg && <Toast msg={msg.text} type={msg.type} />}
+      <ConfirmModal
+        open={!!confirmDeactivate}
+        onOpenChange={(o) => { if (!o) setConfirmDeactivate(null); }}
+        title="Desactivar usuario"
+        description={`¿Desactivar al usuario "${confirmDeactivate?.username}"? No podrá iniciar sesión hasta que sea reactivado.`}
+        confirmLabel="Desactivar"
+        destructive
+        onConfirm={doDeactivate}
+      />
+      <Card>
+        <SectionTitle>Registrar Usuario</SectionTitle>
+        <form onSubmit={handleCreate} className="grid grid-cols-1 gap-3 max-w-md">
+          <Input
+            type="text" placeholder="Nombre de usuario" required
+            value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })}
+          />
+          <Input
+            type="password" placeholder="Contraseña" required
+            value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })}
+          />
+          <Select required value={form.role_id} onChange={(e) => setForm({ ...form, role_id: e.target.value })}>
+            <option value="">Seleccionar rol</option>
+            {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </Select>
+          <BtnPrimary type="submit" disabled={busy}>
+            <Plus size={14} /> {busy ? 'Creando...' : 'Crear Usuario'}
+          </BtnPrimary>
+        </form>
+      </Card>
+
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <SectionTitle>Usuarios Registrados</SectionTitle>
+          <BtnGhost onClick={load}><RefreshCw size={12} /> Actualizar</BtnGhost>
+        </div>
+        <div className="space-y-2">
+          {users.length === 0 && (
+            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No hay usuarios.</p>
+          )}
+          {users.map((u) => (
+            <div
+              key={u.id}
+              className="flex items-center justify-between px-4 py-3 rounded-lg"
+              style={{ background: 'var(--bg-elevated)' }}
             >
-              {tab}
+              <div className="flex items-center gap-3">
+                <div
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold"
+                  style={{ background: 'var(--gold-subtle)', color: 'var(--gold-bright)' }}
+                >
+                  {initials(u.username)}
+                </div>
+                <div>
+                  <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{u.username}</p>
+                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{u.role.name}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <StatusBadge ok={u.is_active} label={u.is_active ? 'activo' : 'inactivo'} />
+                {u.is_active && (
+                  <button
+                    onClick={() => handleDeactivate(u.id, u.username)}
+                    className="text-xs px-2 py-1 rounded border transition-colors"
+                    style={{ borderColor: 'var(--status-red)', color: '#f87171' }}
+                  >
+                    Desactivar
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ── SECTION: Roles ─────────────────────────────────────────────────────────
+
+type RolePerms = {
+  can_manage_users: boolean;
+  can_manage_collections: boolean;
+  can_upload_documents: boolean;
+  can_delete_documents: boolean;
+};
+
+function RoleCard({
+  role,
+  onSaved,
+  onDeleted,
+  flash,
+}: {
+  role: RoleInfo;
+  onSaved: () => void;
+  onDeleted: () => void;
+  flash: (msg: string, type?: 'ok' | 'err') => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [perms, setPerms] = useState<RolePerms>({
+    can_manage_users: role.can_manage_users,
+    can_manage_collections: role.can_manage_collections,
+    can_upload_documents: role.can_upload_documents,
+    can_delete_documents: role.can_delete_documents,
+  });
+  const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const handleSave = async () => {
+    setBusy(true);
+    try {
+      await updateRole(role.id, perms);
+      onSaved();
+      setEditing(false);
+      flash('Permisos del rol actualizados');
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'Error al actualizar', 'err');
+    }
+    setBusy(false);
+  };
+
+  const doDelete = async () => {
+    try {
+      await deleteRole(role.id);
+      onDeleted();
+      flash('Rol eliminado');
+    } catch (err) { flash(err instanceof Error ? err.message : 'Error', 'err'); }
+    setConfirmDelete(false);
+  };
+
+  return (
+    <>
+      <ConfirmModal
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Eliminar rol"
+        description={`¿Eliminar el rol "${role.name}"? Esta acción no se puede deshacer y afectará a todos los usuarios con este rol.`}
+        confirmLabel="Eliminar"
+        destructive
+        onConfirm={doDelete}
+      />
+      <div className="rounded-lg overflow-hidden" style={{ background: 'var(--bg-elevated)' }}>
+        {/* Header row */}
+        <div className="flex items-center justify-between px-4 py-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>{role.name}</span>
+            {role.is_system && (
+              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(234,179,8,0.15)', color: '#fbbf24' }}>sistema</span>
+            )}
+            {role.description && (
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>— {role.description}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {!role.is_system && (!editing ? (
+              <BtnGhost onClick={() => setEditing(true)}>Editar permisos</BtnGhost>
+            ) : (
+              <>
+                <BtnGhost onClick={() => { setEditing(false); setPerms({ can_manage_users: role.can_manage_users, can_manage_collections: role.can_manage_collections, can_upload_documents: role.can_upload_documents, can_delete_documents: role.can_delete_documents }); }}>
+                  Cancelar
+                </BtnGhost>
+                <BtnPrimary onClick={handleSave} disabled={busy}>
+                  {busy ? 'Guardando...' : 'Guardar'}
+                </BtnPrimary>
+              </>
+            ))}
+            {!role.is_system && !editing && (
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="text-xs px-2 py-1 rounded border"
+                style={{ borderColor: 'var(--status-red)', color: '#f87171' }}
+              >
+                Eliminar
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Permissions row */}
+        <div
+          className="px-4 pb-3"
+          style={{ borderTop: editing ? '1px solid var(--border-subtle)' : undefined }}
+        >
+          {editing ? (
+            <div className="grid grid-cols-2 gap-2 pt-3">
+              {PERM_LABELS.map(({ key, label }) => (
+                <label key={key} className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: 'var(--text-secondary)' }}>
+                  <input
+                    type="checkbox"
+                    checked={perms[key as keyof RolePerms]}
+                    onChange={(e) => setPerms({ ...perms, [key]: e.target.checked })}
+                    className="accent-yellow-500"
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2 pt-1">
+              {PERM_LABELS.map(({ key, label }) => (
+                <StatusBadge key={key} ok={role[key] as boolean} label={label} />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function RolesSection({ roles, onRolesChange }: { roles: RoleInfo[]; onRolesChange: () => void }) {
+  const [form, setForm] = useState({
+    name: '', description: '',
+    can_manage_users: false, can_manage_collections: false,
+    can_upload_documents: false, can_delete_documents: false,
+  });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; type: 'ok' | 'err' } | null>(null);
+
+  const flash = (text: string, type: 'ok' | 'err' = 'ok') => {
+    setMsg({ text, type });
+    setTimeout(() => setMsg(null), 3000);
+  };
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await createRole(form);
+      setForm({ name: '', description: '', can_manage_users: false, can_manage_collections: false, can_upload_documents: false, can_delete_documents: false });
+      onRolesChange();
+      flash('Rol creado');
+    } catch (err) { flash(err instanceof Error ? err.message : 'Error', 'err'); }
+    setBusy(false);
+  };
+
+  return (
+    <div className="space-y-6">
+      {msg && <Toast msg={msg.text} type={msg.type} />}
+      <Card>
+        <SectionTitle>Crear Rol</SectionTitle>
+        <form onSubmit={handleCreate} className="grid grid-cols-1 gap-3 max-w-md">
+          <Input
+            type="text" placeholder="Nombre del rol" required
+            value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+          />
+          <Input
+            type="text" placeholder="Descripción (opcional)"
+            value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}
+          />
+          <div className="grid grid-cols-2 gap-2 pt-1">
+            {PERM_LABELS.map(({ key, label }) => (
+              <label key={key} className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: 'var(--text-secondary)' }}>
+                <input
+                  type="checkbox"
+                  checked={form[key] as boolean}
+                  onChange={(e) => setForm({ ...form, [key]: e.target.checked })}
+                  className="accent-yellow-500"
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <BtnPrimary type="submit" disabled={busy}>
+            <Plus size={14} /> {busy ? 'Creando...' : 'Crear Rol'}
+          </BtnPrimary>
+        </form>
+      </Card>
+
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <SectionTitle>Roles del Sistema</SectionTitle>
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Los roles de sistema no se pueden eliminar ni editar sus permisos</span>
+        </div>
+        <div className="space-y-3">
+          {roles.map((r) => (
+            <RoleCard
+              key={r.id}
+              role={r}
+              onSaved={onRolesChange}
+              onDeleted={onRolesChange}
+              flash={flash}
+            />
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ── SECTION: Colecciones ───────────────────────────────────────────────────
+
+function CollectionPermRow({
+  entry,
+  onSave,
+}: {
+  entry: RolePermEntry;
+  onSave: (roleId: string, perms: { can_view: boolean; can_download: boolean; can_chat: boolean }) => void;
+}) {
+  const [on, setOn] = useState(entry.can_view || entry.can_download || entry.can_chat);
+
+  const toggle = () => {
+    const next = !on;
+    setOn(next);
+    onSave(entry.role_id, { can_view: next, can_download: next, can_chat: next });
+  };
+
+  return (
+    <div className="flex items-center gap-3 py-2 px-3 rounded-lg" style={{ background: 'var(--bg-base)' }}>
+      <span className="text-sm flex-1" style={{ color: 'var(--text-primary)' }}>{entry.role_name}</span>
+      <div className="flex flex-col items-center gap-1">
+        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Acceso</span>
+        <button
+          style={{
+            width: 36, height: 20, borderRadius: 10,
+            background: on ? 'var(--gold-muted)' : 'var(--bg-base)',
+            border: `1px solid ${on ? 'var(--gold-bright)' : 'var(--border-default)'}`,
+            position: 'relative', cursor: 'pointer', flexShrink: 0,
+            transition: 'background 0.15s',
+          }}
+          onClick={toggle}
+        >
+          <div style={{
+            position: 'absolute', top: 2,
+            left: on ? 18 : 2, width: 14, height: 14,
+            borderRadius: '50%',
+            background: on ? 'var(--gold-bright)' : 'var(--text-muted)',
+            transition: 'left 0.15s',
+          }} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function UserSearchInput({
+  users,
+  onSelect,
+}: {
+  users: UserOut[];
+  onSelect: (user: UserOut) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState<UserOut | null>(null);
+  const [showList, setShowList] = useState(false);
+
+  const filtered = query.trim()
+    ? users.filter((u) => u.username.toLowerCase().includes(query.toLowerCase()))
+    : users;
+
+  const pick = (u: UserOut) => {
+    setSelected(u);
+    setQuery('');
+    setShowList(false);
+    onSelect(u);
+  };
+
+  const clear = () => {
+    setSelected(null);
+    setQuery('');
+  };
+
+  return (
+    <div className="relative flex-1">
+      {selected ? (
+        <div
+          className="flex items-center gap-2 px-3 py-2 rounded-lg border text-sm"
+          style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-primary)' }}
+        >
+          <span className="flex-1">{selected.username}</span>
+          <button onClick={clear} style={{ color: 'var(--text-muted)' }}>
+            <X size={12} />
+          </button>
+        </div>
+      ) : (
+        <input
+          type="text"
+          placeholder="Buscar usuario..."
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setShowList(true); }}
+          onFocus={() => setShowList(true)}
+          onBlur={() => setTimeout(() => setShowList(false), 150)}
+          className="w-full px-3 py-2 rounded-lg border text-sm focus:outline-none focus:ring-1 focus:ring-yellow-600"
+          style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-primary)' }}
+        />
+      )}
+      {showList && !selected && filtered.length > 0 && (
+        <div
+          className="absolute z-10 w-full mt-1 rounded-lg border shadow-lg max-h-40 overflow-y-auto"
+          style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-subtle)' }}
+        >
+          {filtered.map((u) => (
+            <button
+              key={u.id}
+              onMouseDown={() => pick(u)}
+              className="w-full text-left px-3 py-2 text-sm hover:bg-opacity-80 transition-colors"
+              style={{ color: 'var(--text-primary)' }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-surface)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              {u.username}
+              <span className="ml-2 text-xs" style={{ color: 'var(--text-muted)' }}>{u.role.name}</span>
             </button>
           ))}
         </div>
-        <button onClick={handleLogout} className="flex items-center gap-2 text-red-400 hover:text-red-300">
-          <LogOut size={16} /> Salir
-        </button>
-      </div>
+      )}
+    </div>
+  );
+}
 
-      <div className="bg-gray-800 p-6 rounded-lg" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)', borderWidth: 1 }}>
-        {activeTab === 'usuarios' && (
-          <div>
-            <h2 className="text-xl font-bold mb-4" style={{ color: 'var(--gold-bright)' }}>Registrar Usuario</h2>
-            <form onSubmit={handleCreateUser} className="space-y-4 mb-8 max-w-md">
-              <input type="email" placeholder="Correo" required value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} className="w-full p-2 rounded" style={{ background: 'var(--bg-elevated)' }} />
-              <input type="password" placeholder="Contraseña" required value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="w-full p-2 rounded" style={{ background: 'var(--bg-elevated)' }} />
-              <select required value={newUser.role_id} onChange={e => setNewUser({...newUser, role_id: e.target.value})} className="w-full p-2 rounded" style={{ background: 'var(--bg-elevated)' }}>
-                <option value="">Seleccionar Rol</option>
-                {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-              </select>
-              <button type="submit" className="px-4 py-2 rounded bg-yellow-600 text-black font-semibold">Crear Usuario</button>
-            </form>
-            <h3 className="text-lg font-semibold mb-2">Usuarios Registrados</h3>
-            <ul className="space-y-2">
-              {users.map(u => (
-                <li key={u.id} className="p-3 rounded bg-gray-700" style={{ background: 'var(--bg-elevated)' }}>
-                  {u.email} - Rol: {u.role.name}
-                </li>
+function CollectionCard({
+  col, users, roles,
+}: { col: CollectionOut; users: UserOut[]; roles: RoleInfo[] }) {
+  const [open, setOpen] = useState(false);
+  const [rolePerms, setRolePerms] = useState<RolePermEntry[]>([]);
+  const [userPerms, setUserPerms] = useState<UserPermEntry[]>([]);
+  const [addUser, setAddUser] = useState<UserOut | null>(null);
+  const [searchResetKey, setSearchResetKey] = useState(0);
+  const [loadingPerms, setLoadingPerms] = useState(false);
+
+  const loadPerms = useCallback(async () => {
+    setLoadingPerms(true);
+    try {
+      const [rp, up] = await Promise.all([
+        getCollectionRolePerms(col.id),
+        getCollectionUserPerms(col.id),
+      ]);
+      setRolePerms(rp);
+      setUserPerms(up);
+    } catch {}
+    setLoadingPerms(false);
+  }, [col.id]);
+
+  useEffect(() => { if (open) loadPerms(); }, [open, loadPerms]);
+
+  const saveRolePerm = async (roleId: string, perms: { can_view: boolean; can_download: boolean; can_chat: boolean }) => {
+    try { await updateCollectionRolePerm(col.id, roleId, perms); }
+    catch {}
+  };
+
+  const addUserException = async () => {
+    if (!addUser) return;
+    try {
+      await updateCollectionUserPerm(col.id, addUser.id, { can_view: true, can_download: true, can_chat: true });
+      setAddUser(null);
+      setSearchResetKey((k) => k + 1);
+      await loadPerms();
+    } catch {}
+  };
+
+  const removeUserException = async (userId: string) => {
+    try { await deleteCollectionUserPerm(col.id, userId); await loadPerms(); }
+    catch {}
+  };
+
+  const getUsernameById = (userId: string) =>
+    users.find((u) => u.id === userId)?.username ?? userId.slice(0, 8) + '...';
+
+  const usersWithoutException = users.filter(
+    (u) => !userPerms.some((up) => up.user_id === u.id)
+  );
+
+  return (
+    <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border-subtle)' }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between px-5 py-4 transition-colors"
+        style={{ background: open ? 'var(--bg-elevated)' : 'var(--bg-surface)' }}
+      >
+        <div className="flex items-center gap-3">
+          <FolderOpen size={16} style={{ color: 'var(--gold-muted)' }} />
+          <span className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>{col.name}</span>
+          {col.description && (
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>— {col.description}</span>
+          )}
+          <StatusBadge ok={col.is_active} label={col.is_active ? 'activa' : 'inactiva'} />
+        </div>
+        {open ? <ChevronUp size={14} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />}
+      </button>
+
+      {open && (
+        <div className="px-5 py-4 space-y-5" style={{ background: 'var(--bg-elevated)', borderTop: '1px solid var(--border-subtle)' }}>
+          {loadingPerms ? (
+            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Cargando permisos...</p>
+          ) : (
+            <>
+              {/* Role permissions */}
+              <div>
+                <p className="text-xs font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+                  Acceso por Rol
+                </p>
+                <div className="space-y-2">
+                  {rolePerms
+                    .filter((rp) => !roles.find((r) => r.id === rp.role_id)?.is_system)
+                    .map((rp) => (
+                      <CollectionPermRow key={rp.role_id} entry={rp} onSave={saveRolePerm} />
+                    ))}
+                  {rolePerms.filter((rp) => !roles.find((r) => r.id === rp.role_id)?.is_system).length === 0 && (
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Sin permisos de rol configurados.</p>
+                  )}
+                </div>
+              </div>
+
+              {/* User exceptions */}
+              <div>
+                <p className="text-xs font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+                  Acceso Individual por Usuario
+                </p>
+                <div className="space-y-2 mb-3">
+                  {userPerms.map((up) => (
+                    <div key={up.user_id} className="flex items-center justify-between px-3 py-2 rounded-lg" style={{ background: 'var(--bg-base)' }}>
+                      <span className="text-sm" style={{ color: 'var(--text-primary)' }}>
+                        {getUsernameById(up.user_id)}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="text-xs px-1.5 py-0.5 rounded"
+                          style={{ background: 'rgba(45,122,79,0.2)', color: '#4ade80' }}
+                        >
+                          Acceso
+                        </span>
+                        <button
+                          onClick={() => removeUserException(up.user_id)}
+                          className="text-xs ml-1"
+                          style={{ color: '#f87171' }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {userPerms.length === 0 && (
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Sin excepciones individuales.</p>
+                  )}
+                </div>
+                {usersWithoutException.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <UserSearchInput
+                      key={searchResetKey}
+                      users={usersWithoutException}
+                      onSelect={(u) => setAddUser(u)}
+                    />
+                    <BtnGhost onClick={addUserException} disabled={!addUser}>
+                      <Plus size={12} /> Agregar
+                    </BtnGhost>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type DocRolePermsForm = Record<string, { can_view: boolean; can_download: boolean; can_chat: boolean }>;
+
+function ColeccionesSection({ roles }: { roles: RoleInfo[] }) {
+  const [collections, setCollections] = useState<CollectionOut[]>([]);
+  const [users, setUsers] = useState<UserOut[]>([]);
+  const [msg, setMsg] = useState<{ text: string; type: 'ok' | 'err' } | null>(null);
+
+  // Multi-step modal state
+  const [modalOpen, setModalOpen] = useState(false);
+  const [step, setStep] = useState(1);
+  const [form, setForm] = useState({ name: '', description: '' });
+  const [rolePermsForm, setRolePermsForm] = useState<DocRolePermsForm>({});
+  const [busy, setBusy] = useState(false);
+
+  const flash = (text: string, type: 'ok' | 'err' = 'ok') => {
+    setMsg({ text, type });
+    setTimeout(() => setMsg(null), 3000);
+  };
+
+  const load = useCallback(async () => {
+    try {
+      const [cols, usrs] = await Promise.all([getCollections(), getUsers()]);
+      setCollections(cols);
+      setUsers(usrs.items);
+    } catch {}
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const openModal = () => {
+    const initial: DocRolePermsForm = {};
+    roles.filter((r) => !r.is_system).forEach((r) => { initial[r.id] = { can_view: false, can_download: false, can_chat: false }; });
+    setRolePermsForm(initial);
+    setForm({ name: '', description: '' });
+    setStep(1);
+    setModalOpen(true);
+  };
+
+  const handleCreate = async () => {
+    setBusy(true);
+    try {
+      const col = await createCollection(form);
+      // Save all role permissions in parallel
+      await Promise.all(
+        Object.entries(rolePermsForm).map(([roleId, perms]) =>
+          updateCollectionRolePerm(col.id, roleId, perms)
+        )
+      );
+      setModalOpen(false);
+      await load();
+      flash('Colección creada');
+    } catch (err) { flash(err instanceof Error ? err.message : 'Error', 'err'); }
+    setBusy(false);
+  };
+
+  const toggleRolePerm = (roleId: string, key: 'can_view' | 'can_download' | 'can_chat', value: boolean) => {
+    setRolePermsForm((prev) => ({
+      ...prev,
+      [roleId]: { ...prev[roleId], [key]: value },
+    }));
+  };
+
+  return (
+    <div className="space-y-6">
+      {msg && <Toast msg={msg.text} type={msg.type} />}
+
+      {/* Multi-step collection creation modal */}
+      <Dialog.Root open={modalOpen} onOpenChange={(o) => { if (!busy) setModalOpen(o); }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+          <Dialog.Content
+            className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg rounded-2xl p-6 shadow-2xl"
+            style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}
+          >
+            {/* Step indicator */}
+            <div className="flex items-center gap-2 mb-5">
+              {[1, 2].map((s) => (
+                <React.Fragment key={s}>
+                  <div
+                    className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+                    style={{
+                      background: step >= s ? 'var(--gold-bright)' : 'var(--bg-surface)',
+                      color: step >= s ? '#0A1A10' : 'var(--text-muted)',
+                      border: step >= s ? 'none' : '1px solid var(--border-default)',
+                    }}
+                  >
+                    {s}
+                  </div>
+                  {s < 2 && (
+                    <div className="w-8 h-px shrink-0" style={{ background: step > s ? 'var(--gold-bright)' : 'var(--border-default)' }} />
+                  )}
+                </React.Fragment>
               ))}
-            </ul>
-          </div>
-        )}
+              <span className="ml-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                {step === 1 ? 'Datos básicos' : 'Permisos por rol'}
+              </span>
+            </div>
 
-        {activeTab === 'roles' && (
-          <div>
-            <h2 className="text-xl font-bold mb-4" style={{ color: 'var(--gold-bright)' }}>Añadir Rol</h2>
-            <form onSubmit={handleCreateRole} className="space-y-4 mb-8 max-w-md">
-              <input type="text" placeholder="Nombre del Rol (ej: dba, so)" required value={newRole} onChange={e => setNewRole(e.target.value)} className="w-full p-2 rounded" style={{ background: 'var(--bg-elevated)' }} />
-              <button type="submit" className="px-4 py-2 rounded bg-yellow-600 text-black font-semibold">Crear Rol</button>
-            </form>
-            <h3 className="text-lg font-semibold mb-2">Roles Actuales</h3>
-            <ul className="space-y-2">
-              {roles.map(r => (
-                <li key={r.id} className="p-3 rounded bg-gray-700" style={{ background: 'var(--bg-elevated)' }}>{r.name}</li>
-              ))}
-            </ul>
-          </div>
-        )}
+            <div className="flex items-center justify-between mb-4">
+              <Dialog.Title
+                className="text-base font-semibold"
+                style={{ color: 'var(--gold-bright)', fontFamily: 'Playfair Display, serif' }}
+              >
+                Nueva Colección
+              </Dialog.Title>
+              {!busy && (
+                <Dialog.Close asChild>
+                  <button className="p-1 rounded-md" style={{ color: 'var(--text-muted)' }}>
+                    <X size={14} />
+                  </button>
+                </Dialog.Close>
+              )}
+            </div>
 
-        {activeTab === 'documentos' && (
-          <div>
-            <h2 className="text-xl font-bold mb-4" style={{ color: 'var(--gold-bright)' }}>Subir Documento por Rol</h2>
-            <form onSubmit={handleUploadDocument} className="space-y-4 max-w-md">
-              <input type="file" required onChange={e => setUploadFile(e.target.files?.[0] || null)} className="w-full" />
-              <select value={uploadRoleId} onChange={e => setUploadRoleId(e.target.value)} className="w-full p-2 rounded" style={{ background: 'var(--bg-elevated)' }}>
-                <option value="">Cualquier Rol / Público</option>
-                {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-              </select>
-              <button type="submit" disabled={uploading} className="px-4 py-2 rounded bg-yellow-600 text-black font-semibold disabled:opacity-50">
-                {uploading ? 'Subiendo...' : 'Subir Documento'}
+            <Dialog.Description className="sr-only">
+              Formulario de creación de colección en {step === 1 ? 'paso 1: datos básicos' : 'paso 2: permisos por rol'}
+            </Dialog.Description>
+
+            {step === 1 ? (
+              <div className="space-y-3">
+                <Input
+                  type="text"
+                  placeholder="Nombre de la colección"
+                  required
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  autoFocus
+                />
+                <Input
+                  type="text"
+                  placeholder="Descripción (opcional)"
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                />
+              </div>
+            ) : (
+              <div>
+                <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
+                  Define qué roles tendrán acceso a esta colección. Puedes ajustarlo después.
+                </p>
+                <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--border-subtle)' }}>
+                  {/* Table header */}
+                  <div
+                    className="grid grid-cols-[1fr_80px] gap-x-2 px-3 py-2 text-xs font-semibold uppercase tracking-wider"
+                    style={{ background: 'var(--bg-surface)', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-subtle)' }}
+                  >
+                    <span>Rol</span>
+                    <span className="text-center">Acceso</span>
+                  </div>
+                  {/* Table rows */}
+                  <div className="divide-y max-h-60 overflow-y-auto" style={{ divideColor: 'var(--border-subtle)' }}>
+                    {roles.filter((r) => !r.is_system).map((r) => {
+                      const p = rolePermsForm[r.id] ?? { can_view: false, can_download: false, can_chat: false };
+                      const hasAccess = p.can_view || p.can_download || p.can_chat;
+                      return (
+                        <div
+                          key={r.id}
+                          className="grid grid-cols-[1fr_80px] gap-x-2 px-3 py-2.5 items-center"
+                          style={{ background: 'var(--bg-elevated)' }}
+                        >
+                          <div>
+                            <span className="text-sm" style={{ color: 'var(--text-primary)' }}>{r.name}</span>
+                            {r.is_system && (
+                              <span className="ml-2 text-xs px-1.5 py-0.5 rounded" style={{ background: 'rgba(234,179,8,0.12)', color: '#fbbf24' }}>
+                                sistema
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex justify-center">
+                            <input
+                              type="checkbox"
+                              checked={hasAccess}
+                              onChange={(e) => {
+                                const v = e.target.checked;
+                                toggleRolePerm(r.id, 'can_view', v);
+                                toggleRolePerm(r.id, 'can_download', v);
+                                toggleRolePerm(r.id, 'can_chat', v);
+                              }}
+                              className="accent-yellow-500 w-4 h-4 cursor-pointer"
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-between mt-6">
+              {step === 1 ? (
+                <Dialog.Close asChild>
+                  <button
+                    className="px-4 py-2 rounded-lg text-xs font-medium"
+                    style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-surface)' }}
+                  >
+                    Cancelar
+                  </button>
+                </Dialog.Close>
+              ) : (
+                <button
+                  onClick={() => setStep(1)}
+                  disabled={busy}
+                  className="px-4 py-2 rounded-lg text-xs font-medium disabled:opacity-50"
+                  style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-surface)' }}
+                >
+                  Atrás
+                </button>
+              )}
+              {step === 1 ? (
+                <button
+                  onClick={() => { if (form.name.trim()) setStep(2); }}
+                  disabled={!form.name.trim()}
+                  className="px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+                  style={{ background: 'var(--gold-bright)', color: '#0A1A10' }}
+                >
+                  Siguiente →
+                </button>
+              ) : (
+                <button
+                  onClick={handleCreate}
+                  disabled={busy}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+                  style={{ background: 'var(--gold-bright)', color: '#0A1A10' }}
+                >
+                  {busy && <Loader2 size={13} className="animate-spin" />}
+                  {busy ? 'Creando...' : 'Crear Colección'}
+                </button>
+              )}
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Card>
+        <div className="flex items-center justify-between mb-2">
+          <SectionTitle>Colecciones</SectionTitle>
+          <div className="flex items-center gap-2">
+            <BtnGhost onClick={load}><RefreshCw size={12} /> Actualizar</BtnGhost>
+            <BtnPrimary onClick={openModal}>
+              <Plus size={14} /> Nueva Colección
+            </BtnPrimary>
+          </div>
+        </div>
+        <div className="space-y-3">
+          {collections.length === 0 && (
+            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No hay colecciones. Crea la primera con el botón de arriba.</p>
+          )}
+          {collections.map((col) => (
+            <CollectionCard key={col.id} col={col} users={users} roles={roles} />
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ── SECTION: Documentos ────────────────────────────────────────────────────
+
+function DocUserPermsModal({
+  doc,
+  users,
+  perms,
+  loading,
+  onAdd,
+  onRemove,
+  onClose,
+}: {
+  doc: PgDocumentOut;
+  users: UserOut[];
+  perms: DocUserPermEntry[];
+  loading: boolean;
+  onAdd: (userId: string) => Promise<void>;
+  onRemove: (userId: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [addUser, setAddUser] = useState<UserOut | null>(null);
+  const [searchResetKey, setSearchResetKey] = useState(0);
+  const [busy, setBusy] = useState(false);
+
+  const usersWithoutPerm = users.filter((u) => !perms.some((p) => p.user_id === u.id));
+
+  const handleAdd = async () => {
+    if (!addUser) return;
+    setBusy(true);
+    await onAdd(addUser.id);
+    setAddUser(null);
+    setSearchResetKey((k) => k + 1);
+    setBusy(false);
+  };
+
+  return (
+    <Dialog.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+        <Dialog.Content
+          className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl p-6 shadow-2xl"
+          style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}
+        >
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <Dialog.Title
+                className="text-base font-semibold"
+                style={{ color: 'var(--gold-bright)', fontFamily: 'Playfair Display, serif' }}
+              >
+                Acceso por Usuario
+              </Dialog.Title>
+              <p className="text-xs mt-0.5 truncate max-w-xs" style={{ color: 'var(--text-muted)' }}>
+                {doc.original_filename}
+              </p>
+            </div>
+            <Dialog.Close asChild>
+              <button className="p-1 rounded-md" style={{ color: 'var(--text-muted)' }}>
+                <X size={14} />
               </button>
-            </form>
+            </Dialog.Close>
           </div>
-        )}
 
-        {activeTab === 'incidencias' && (
-          <div>
-            <h2 className="text-xl font-bold mb-4" style={{ color: 'var(--gold-bright)' }}>Registrar Incidencia</h2>
-            <form onSubmit={handleCreateIncident} className="space-y-4 mb-8 max-w-md">
-              <textarea placeholder="Descripción del problema" required value={newIncident.description} onChange={e => setNewIncident({...newIncident, description: e.target.value})} className="w-full p-2 rounded min-h-[80px]" style={{ background: 'var(--bg-elevated)' }} />
-              <textarea placeholder="Solución" required value={newIncident.solution} onChange={e => setNewIncident({...newIncident, solution: e.target.value})} className="w-full p-2 rounded min-h-[80px]" style={{ background: 'var(--bg-elevated)' }} />
-              <input type="text" placeholder="Nombre de quien resolvió" required value={newIncident.resolved_by} onChange={e => setNewIncident({...newIncident, resolved_by: e.target.value})} className="w-full p-2 rounded" style={{ background: 'var(--bg-elevated)' }} />
-              <button type="submit" className="px-4 py-2 rounded bg-yellow-600 text-black font-semibold">Registrar Incidencia</button>
-            </form>
-            <h3 className="text-lg font-semibold mb-2">Incidencias Registradas</h3>
-            <div className="space-y-4">
-              {incidents.map(inc => (
-                <div key={inc.id} className="p-4 rounded bg-gray-700" style={{ background: 'var(--bg-elevated)' }}>
-                  <p><strong>Descripción:</strong> {inc.description}</p>
-                  <p><strong>Solución:</strong> {inc.solution}</p>
-                  <p className="text-sm mt-2 text-gray-400">Resuelto por: {inc.resolved_by}</p>
+          <Dialog.Description className="sr-only">
+            Gestión de acceso individual por usuario para el documento {doc.original_filename}
+          </Dialog.Description>
+
+          {loading ? (
+            <p className="text-sm py-4 text-center" style={{ color: 'var(--text-muted)' }}>Cargando...</p>
+          ) : (
+            <div className="space-y-3 max-h-60 overflow-y-auto mb-4">
+              {perms.length === 0 && (
+                <p className="text-xs py-2" style={{ color: 'var(--text-muted)' }}>Sin acceso individual asignado.</p>
+              )}
+              {perms.map((p) => (
+                <div
+                  key={p.user_id}
+                  className="flex items-center justify-between px-3 py-2 rounded-lg"
+                  style={{ background: 'var(--bg-base)' }}
+                >
+                  <span className="text-sm" style={{ color: 'var(--text-primary)' }}>{p.username}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'rgba(45,122,79,0.2)', color: '#4ade80' }}>
+                      Acceso
+                    </span>
+                    <button
+                      onClick={() => onRemove(p.user_id)}
+                      className="text-xs ml-1"
+                      style={{ color: '#f87171' }}
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
+          )}
+
+          {usersWithoutPerm.length > 0 && (
+            <div className="flex items-center gap-2 pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+              <UserSearchInput key={searchResetKey} users={usersWithoutPerm} onSelect={(u) => setAddUser(u)} />
+              <BtnGhost onClick={handleAdd} disabled={!addUser || busy}>
+                {busy ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} Agregar
+              </BtnGhost>
+            </div>
+          )}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function DocumentosSection({ canUpload }: { canUpload: boolean }) {
+  const [docs, setDocs] = useState<PgDocumentOut[]>([]);
+  const [collections, setCollections] = useState<CollectionOut[]>([]);
+  const [users, setUsers] = useState<UserOut[]>([]);
+  const [filterCol, setFilterCol] = useState('');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadColId, setUploadColId] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ text: string; type: 'ok' | 'err' } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<PgDocumentOut | null>(null);
+  const [docPermsDoc, setDocPermsDoc] = useState<PgDocumentOut | null>(null);
+  const [docPerms, setDocPerms] = useState<DocUserPermEntry[]>([]);
+  const [docPermsLoading, setDocPermsLoading] = useState(false);
+
+  const flash = (text: string, type: 'ok' | 'err' = 'ok') => {
+    setMsg({ text, type });
+    setTimeout(() => setMsg(null), 3000);
+  };
+
+  const load = useCallback(async () => {
+    try {
+      const [d, c, u] = await Promise.all([getPgDocuments(), getCollections(), getUsers()]);
+      setDocs(d);
+      setCollections(c);
+      setUsers(u.items);
+    } catch {}
+  }, []);
+
+  const loadDocPerms = useCallback(async (docId: string) => {
+    setDocPermsLoading(true);
+    try {
+      const p = await getDocumentUserPerms(docId);
+      setDocPerms(p);
+    } catch {}
+    setDocPermsLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Auto-refresh while any doc is pending/processing
+  useEffect(() => {
+    const hasPending = docs.some((d) => d.rag_status === 'pending' || d.rag_status === 'indexing_images');
+    if (!hasPending) return;
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [docs, load]);
+
+  const handleUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!uploadFile || !uploadColId) return;
+    setUploading(true);
+    try {
+      await uploadToCollection(uploadColId, uploadFile);
+      setUploadFile(null);
+      setUploadColId('');
+      await load();
+      flash('Documento subido — procesando en segundo plano');
+    } catch (err) { flash(err instanceof Error ? err.message : 'Error al subir', 'err'); }
+    setUploading(false);
+  };
+
+  const handleDownload = async (doc: PgDocumentOut) => {
+    setDownloading(doc.doc_id);
+    try { await downloadDocument(doc.doc_id, doc.original_filename); }
+    catch (err) { flash(err instanceof Error ? err.message : 'Error al descargar', 'err'); }
+    setDownloading(null);
+  };
+
+  const handleDelete = (doc: PgDocumentOut) => {
+    setConfirmDelete(doc);
+  };
+
+  const doDelete = async () => {
+    if (!confirmDelete) return;
+    try {
+      await deletePgDocument(confirmDelete.doc_id);
+      await load();
+      flash('Documento marcado como obsoleto');
+    } catch (err) { flash(err instanceof Error ? err.message : 'Error', 'err'); }
+    setConfirmDelete(null);
+  };
+
+  const openDocPerms = (doc: PgDocumentOut) => {
+    setDocPermsDoc(doc);
+    setDocPerms([]);
+    loadDocPerms(doc.doc_id);
+  };
+
+  const handleAddDocUserPerm = async (userId: string) => {
+    if (!docPermsDoc) return;
+    try {
+      await updateDocumentUserPerm(docPermsDoc.doc_id, userId, { can_view: true, can_download: true, can_chat: true });
+      await loadDocPerms(docPermsDoc.doc_id);
+    } catch (err) { flash(err instanceof Error ? err.message : 'Error', 'err'); }
+  };
+
+  const handleRemoveDocUserPerm = async (userId: string) => {
+    if (!docPermsDoc) return;
+    try {
+      await deleteDocumentUserPerm(docPermsDoc.doc_id, userId);
+      await loadDocPerms(docPermsDoc.doc_id);
+    } catch (err) { flash(err instanceof Error ? err.message : 'Error', 'err'); }
+  };
+
+  const visible = filterCol ? docs.filter((d) => d.collection_id === filterCol) : docs;
+
+  return (
+    <div className="space-y-6">
+      {msg && <Toast msg={msg.text} type={msg.type} />}
+      {docPermsDoc && (
+        <DocUserPermsModal
+          doc={docPermsDoc}
+          users={users}
+          perms={docPerms}
+          loading={docPermsLoading}
+          onAdd={handleAddDocUserPerm}
+          onRemove={handleRemoveDocUserPerm}
+          onClose={() => setDocPermsDoc(null)}
+        />
+      )}
+      <ConfirmModal
+        open={!!confirmDelete}
+        onOpenChange={(o) => { if (!o) setConfirmDelete(null); }}
+        title="Marcar como obsoleto"
+        description={`¿Marcar "${confirmDelete?.title || confirmDelete?.original_filename}" como obsoleto? El documento dejará de aparecer en búsquedas y consultas.`}
+        confirmLabel="Marcar obsoleto"
+        destructive
+        onConfirm={doDelete}
+      />
+
+      {canUpload && (
+        <Card>
+          <SectionTitle>Subir Documento</SectionTitle>
+          <form onSubmit={handleUpload} className="grid grid-cols-1 gap-3 max-w-md">
+            <Select
+              required value={uploadColId}
+              onChange={(e) => setUploadColId(e.target.value)}
+            >
+              <option value="">Seleccionar colección</option>
+              {collections.filter((c) => c.is_active).map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </Select>
+            <div
+              className="flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer"
+              style={{ borderColor: 'var(--border-default)', background: 'var(--bg-elevated)' }}
+              onClick={() => document.getElementById('file-input')?.click()}
+            >
+              <Upload size={14} style={{ color: 'var(--text-muted)' }} />
+              <span className="text-sm" style={{ color: uploadFile ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                {uploadFile ? uploadFile.name : 'Seleccionar archivo...'}
+              </span>
+              <input
+                id="file-input" type="file" className="hidden"
+                onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp"
+              />
+            </div>
+            <BtnPrimary type="submit" disabled={uploading || !uploadFile || !uploadColId}>
+              <Upload size={14} /> {uploading ? 'Subiendo...' : 'Subir Documento'}
+            </BtnPrimary>
+          </form>
+        </Card>
+      )}
+
+      <Card>
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+          <SectionTitle>Documentos</SectionTitle>
+          <div className="flex items-center gap-2">
+            <Select
+              value={filterCol}
+              onChange={(e) => setFilterCol(e.target.value)}
+              className="text-xs w-44"
+            >
+              <option value="">Todas las colecciones</option>
+              {collections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </Select>
+            <BtnGhost onClick={load}><RefreshCw size={12} /> Actualizar</BtnGhost>
+          </div>
+        </div>
+
+        {visible.length === 0 ? (
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No hay documentos.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                  {['Nombre', 'Colección', 'Estado RAG', 'Tamaño', 'Fecha', 'Acciones'].map((h) => (
+                    <th key={h} className="text-left py-2 px-3 text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((doc) => {
+                  const rag = RAG_LABEL[doc.rag_status] ?? RAG_LABEL['sin_rag'];
+                  const isObsolete = doc.pg_status === 'OBSOLETE';
+                  return (
+                    <tr
+                      key={doc.doc_id}
+                      style={{
+                        borderBottom: '1px solid var(--border-subtle)',
+                        opacity: isObsolete ? 0.5 : 1,
+                      }}
+                    >
+                      <td className="py-3 px-3 max-w-xs">
+                        <div className="flex items-center gap-2">
+                          <FileText size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                          <span className="truncate" style={{ color: 'var(--text-primary)' }} title={doc.original_filename}>
+                            {doc.original_filename}
+                          </span>
+                          {isObsolete && (
+                            <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'rgba(100,100,100,0.2)', color: '#6b7280' }}>
+                              obsoleto
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--gold-subtle)', color: 'var(--gold-bright)' }}>
+                          {doc.collection_name}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <span
+                          className="flex items-center gap-1 text-xs"
+                          style={{ color: rag.color }}
+                        >
+                          {rag.icon} {rag.label}
+                          {doc.rag_status === 'ready' && doc.rag_chunk_count > 0 && (
+                            <span style={{ color: 'var(--text-muted)' }}>({doc.rag_chunk_count} fragmentos)</span>
+                          )}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap text-xs" style={{ color: 'var(--text-secondary)' }}>
+                        {formatBytes(doc.file_size_bytes)}
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap text-xs" style={{ color: 'var(--text-secondary)' }}>
+                        {formatDate(doc.created_at)}
+                      </td>
+                      <td className="py-3 px-3">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            onClick={() => handleDownload(doc)}
+                            disabled={downloading === doc.doc_id}
+                            className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50"
+                            style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
+                            title="Descargar"
+                          >
+                            {downloading === doc.doc_id
+                              ? <Loader2 size={11} className="animate-spin" />
+                              : <Download size={11} />}
+                            Descargar
+                          </button>
+                          <button
+                            onClick={() => openDocPerms(doc)}
+                            className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors"
+                            style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
+                            title="Gestionar acceso de usuarios"
+                          >
+                            <UserPlus size={11} /> Usuarios
+                          </button>
+                          {!isObsolete && (
+                            <button
+                              onClick={() => handleDelete(doc)}
+                              className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors"
+                              style={{ borderColor: 'var(--status-red)', color: '#f87171' }}
+                              title="Marcar como obsoleto"
+                            >
+                              <Trash2 size={11} /> Obsoleto
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
+      </Card>
+    </div>
+  );
+}
+
+// ── MAIN PAGE ──────────────────────────────────────────────────────────────
+
+export default function AdminPage() {
+  const router = useRouter();
+  const {
+    user,
+    isLoading,
+    canManageUsers,
+    canManageCollections,
+    canUploadDocuments,
+  } = useAuth();
+
+  const [activeSection, setActiveSection] = useState('');
+  const [roles, setRoles] = useState<RoleInfo[]>([]);
+
+  const canUploadDocs = canUploadDocuments || canManageCollections;
+
+  const loadRoles = useCallback(async () => {
+    try { setRoles(await getRoles()); } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (isLoading) return;
+    if (!user) { router.push('/login'); return; }
+    if (!canManageUsers && !canManageCollections && !canUploadDocs) {
+      router.push('/login');
+      return;
+    }
+
+    if (!activeSection) {
+      if (canManageUsers) setActiveSection('usuarios');
+      else if (canManageCollections) setActiveSection('colecciones');
+      else setActiveSection('documentos');
+    }
+
+    loadRoles();
+  }, [user, isLoading, router, loadRoles, canManageUsers, canManageCollections, canUploadDocs, activeSection]);
+
+  const navItems = [
+    canManageUsers && { id: 'usuarios', label: 'Usuarios', icon: Users },
+    canManageUsers && { id: 'roles', label: 'Roles', icon: Shield },
+    canManageCollections && { id: 'colecciones', label: 'Colecciones', icon: FolderOpen },
+    canUploadDocs && { id: 'documentos', label: 'Documentos', icon: FileText },
+  ].filter(Boolean) as { id: string; label: string; icon: React.ElementType }[];
+
+  if (isLoading || !user) return null;
+
+  return (
+    <div className="flex-1 flex flex-col" style={{ background: 'var(--bg-base)' }}>
+      {/* ── Body ── */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar */}
+        <aside
+          className="shrink-0 w-48 flex flex-col py-4 px-2 gap-1"
+          style={{ background: 'var(--bg-surface)', borderRight: '1px solid var(--border-subtle)' }}
+        >
+          {navItems.map((item) => (
+            <NavItem
+              key={item.id}
+              id={item.id}
+              label={item.label}
+              icon={item.icon}
+              active={activeSection === item.id}
+              onClick={() => setActiveSection(item.id)}
+            />
+          ))}
+        </aside>
+
+        {/* Content */}
+        <main className="flex-1 overflow-y-auto p-6">
+          {activeSection === 'usuarios' && canManageUsers && (
+            <UsuariosSection roles={roles} />
+          )}
+          {activeSection === 'roles' && canManageUsers && (
+            <RolesSection roles={roles} onRolesChange={loadRoles} />
+          )}
+          {activeSection === 'colecciones' && canManageCollections && (
+            <ColeccionesSection roles={roles} />
+          )}
+          {activeSection === 'documentos' && canUploadDocs && (
+            <DocumentosSection canUpload={canUploadDocs} />
+          )}
+        </main>
       </div>
     </div>
   );

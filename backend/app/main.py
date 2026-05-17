@@ -6,14 +6,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.database import Base, engine, AsyncSessionLocal
 from app.routers import chat, documents, ingest, auth, admin
+from app.routers import users as users_router
+from app.routers import roles as roles_router
+from app.routers import permissions as permissions_router
+from app.routers.permissions import doc_perm_router
+from app.routers import collections as collections_router
+from app.routers import pg_documents as pg_documents_router
 from app.schemas import HealthResponse, HealthService
 from app.services import embedder, file_storage, vector_store
 from app.utils.model_manager import download_and_load_all
-from app.models import Role, User
-from app.utils.security import get_password_hash
-from sqlalchemy.future import select
+from app.db.session import PGAsyncSessionLocal, pg_engine
+from app.seed import seed_initial_admin
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,86 +30,41 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     logger.info("=" * 60)
-    logger.info("Bank Documentation RAG — Starting up")
+    logger.info("Bank Documentation RAG — Iniciando")
     logger.info("=" * 60)
 
-    logger.info("[1/4] Downloading / loading HuggingFace models...")
-    logger.info("      First run downloads ~2.5 GB — progress bars shown below.")
+    logger.info("[1/5] Descargando / cargando modelos (Gemma-4 + BGE-M3)...")
+    logger.info("      Primera ejecución descarga ~4 GB — progreso abajo.")
     await download_and_load_all()
 
-    logger.info("[2/4] Creating database tables...")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    logger.info("[2/5] Conectando a PostgreSQL y creando datos iniciales...")
+    async with PGAsyncSessionLocal() as pg_db:
+        await seed_initial_admin(pg_db)
 
-        def _migrate(sync_conn):
-            cols = {
-                row[1] for row in sync_conn.exec_driver_sql(
-                    "PRAGMA table_info(document_images)"
-                ).fetchall()
-            }
-            if "ocr_text" not in cols:
-                sync_conn.exec_driver_sql(
-                    "ALTER TABLE document_images ADD COLUMN ocr_text TEXT"
-                )
-                logger.info("      Migration: added document_images.ocr_text")
-                
-            doc_cols = {
-                row[1] for row in sync_conn.exec_driver_sql(
-                    "PRAGMA table_info(documents)"
-                ).fetchall()
-            }
-            if "role_id" not in doc_cols:
-                sync_conn.exec_driver_sql(
-                    "ALTER TABLE documents ADD COLUMN role_id VARCHAR REFERENCES roles(id) ON DELETE SET NULL"
-                )
-                logger.info("      Migration: added documents.role_id")
-
-        await conn.run_sync(_migrate)
-        
-    logger.info("[2.5/4] Creating default roles and admin...")
-    async with AsyncSessionLocal() as db:
-        admin_role_result = await db.execute(select(Role).where(Role.name == "admin"))
-        admin_role = admin_role_result.scalar_one_or_none()
-        if not admin_role:
-            admin_role = Role(name="admin")
-            db.add(admin_role)
-            await db.commit()
-            await db.refresh(admin_role)
-            
-        normal_role_result = await db.execute(select(Role).where(Role.name == "normal"))
-        if not normal_role_result.scalar_one_or_none():
-            db.add(Role(name="normal"))
-            await db.commit()
-            
-        admin_user_result = await db.execute(select(User).where(User.email == "admin@bmsc.com"))
-        if not admin_user_result.scalar_one_or_none():
-            admin_user = User(
-                email="admin@bmsc.com",
-                hashed_password=get_password_hash("admin123"),
-                role_id=admin_role.id
-            )
-            db.add(admin_user)
-            await db.commit()
-
-    logger.info("[3/4] Initializing embedded Qdrant vector store...")
+    logger.info("[3/5] Inicializando ChromaDB (vector store embebido)...")
     await vector_store.ensure_collections()
 
-    logger.info("[4/4] Ensuring local storage directories...")
+    logger.info("[4/5] Verificando directorios de almacenamiento...")
     await file_storage.ensure_buckets()
 
+    logger.info("[5/5] Inicializando caché SQLite (embeddings + respuestas)...")
+    from app.cache import embedding_cache, response_cache
+    embedding_cache.init_db(settings.cache_dir)
+    response_cache.init_db(settings.cache_dir)
+
     logger.info("=" * 60)
-    logger.info("Server ready!  http://localhost:8000")
-    logger.info("API docs:      http://localhost:8000/docs")
+    logger.info("Servidor listo!  http://localhost:8000")
+    logger.info("API docs:        http://localhost:8000/docs")
     logger.info("=" * 60)
     yield
 
-    logger.info("Shutting down...")
-    await engine.dispose()
+    logger.info("Apagando servidor...")
+    await pg_engine.dispose()
 
 
 app = FastAPI(
     title="Bank Documentation RAG API",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -122,31 +81,37 @@ app.include_router(documents.router)
 app.include_router(chat.router)
 app.include_router(auth.router)
 app.include_router(admin.router)
+app.include_router(users_router.router)
+app.include_router(roles_router.router)
+app.include_router(permissions_router.router)
+app.include_router(doc_perm_router)
+app.include_router(collections_router.router)
+app.include_router(pg_documents_router.router)
 
 
 @app.get("/api/health", response_model=HealthResponse)
 async def health():
     services: list[HealthService] = []
 
-    qdrant_ok = await vector_store.check_health()
+    chroma_ok = await vector_store.check_health()
     services.append(HealthService(
-        name="qdrant_embedded",
-        status="ok" if qdrant_ok else "error",
-        detail=None if qdrant_ok else f"Embedded Qdrant not accessible at {settings.qdrant_path}",
+        name="chroma_embedded",
+        status="ok" if chroma_ok else "error",
+        detail=None if chroma_ok else f"ChromaDB no accesible en {settings.chroma_path}",
     ))
 
     storage_ok = await file_storage.check_health()
     services.append(HealthService(
         name="local_storage",
         status="ok" if storage_ok else "error",
-        detail=None if storage_ok else f"Storage path not accessible: {settings.storage_path}",
+        detail=None if storage_ok else f"Storage path no accesible: {settings.storage_path}",
     ))
 
     models_ok = await embedder.check_health()
     services.append(HealthService(
         name="hf_models",
         status="ok" if models_ok else "error",
-        detail=None if models_ok else "HuggingFace models not loaded",
+        detail=None if models_ok else "Modelos HuggingFace no cargados",
     ))
 
     overall = "ok" if all(s.status == "ok" for s in services) else "degraded"

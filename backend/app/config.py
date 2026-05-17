@@ -8,64 +8,64 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Local embedded Qdrant path (no Docker needed)
-    qdrant_path: str = "./data/qdrant"
+    # ChromaDB embebido (reemplaza Qdrant)
+    chroma_path: str = "./data/chroma"
+    chroma_collection: str = "rag_content"
 
     # Local filesystem storage path
     storage_path: str = "./data/storage"
 
-    sqlite_path: str = "./data/db.sqlite"
+    # Caché SQLite (embeddings + respuestas LLM)
+    cache_dir: str = "./cache"
 
-    # HuggingFace model identifiers
+    # HuggingFace model cache
     hf_cache_dir: str = "./models_cache"
 
-    # LLM (text-only) — used for chat answers
-    llm_gguf_repo: str = "bartowski/Qwen2.5-1.5B-Instruct-GGUF"
-    llm_gguf_filename: str = "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"
+    # LLM + visión: Gemma-4 GGUF via llama-cpp-python
+    llm_gguf_repo: str = "bartowski/google_gemma-4-E4B-it-GGUF"
+    llm_gguf_filename: str = "google_gemma-4-E4B-it-Q4_K_M.gguf"
+    # Proyector multimodal para visión (captioning de imágenes)
+    llm_mmproj_filename: str = "mmproj-google_gemma-4-E4B-it-f16.gguf"
 
-    # Text embeddings — used for the document text and image-description chunks
-    # intfloat/multilingual-e5-small requires query:/passage: prefixes (asymmetric retrieval)
-    embed_model_id: str = "intfloat/multilingual-e5-small"
-
-    # BLIP image captioning — fast CPU-friendly model (~450 MB, 2-5s/image)
-    blip_model_id: str = "Salesforce/blip-image-captioning-base"
-    blip_max_new_tokens: int = 200
+    # Embeddings: BGE-M3 — recuperación simétrica, sin prefijos query:/passage:
+    embed_model_id: str = "BAAI/bge-m3"
+    embedding_dims: int = 1024
 
     # Ingestion performance knobs
-    max_images_per_doc: int = 50   # with BLIP (~3s/img) 50 imgs ≈ 2-3 min; set in .env to override
-    skip_ocr: bool = False         # set to true in .env to disable RapidOCR entirely
+    max_images_per_doc: int = 50
+    skip_ocr: bool = False
 
-    # CLIP-multilingual — used for direct visual ↔ text retrieval (second vector space)
-    # The text encoder (multilingual) is a distilled version aligned to OpenAI's
-    # CLIP image encoder, so they live in the same 512-dim space.
-    clip_model_id: str = "sentence-transformers/clip-ViT-B-32-multilingual-v1"
-    clip_image_model_id: str = "openai/clip-vit-base-patch32"
-    clip_dims: int = 512
-
-    # llama-cpp inference settings (text LLM)
-    llm_n_ctx: int = 8192
+    # llama-cpp inference settings
+    llm_n_ctx: int = 4096
     llm_n_threads: int = 0      # 0 = auto-detect CPU count
     llm_max_tokens: int = 1024
-    llm_repeat_penalty: float = 1.3   # penalizes token repetition; >1.0 breaks loops
+    llm_repeat_penalty: float = 1.3
 
     # Retrieval / RAG knobs
     max_context_chunks: int = 5
     max_context_images: int = 3
-    min_image_score: float = 0.35   # drop images below this absolute similarity
-    image_score_gap: float = 0.80   # drop images below best_image_score * this ratio
+    min_image_score: float = 0.35
+    image_score_gap: float = 0.80
 
-    # Visual-query mode (relaxed filters when the query is clearly about images)
+    # Visual-query mode
     visual_query_max_images: int = 6
     visual_query_min_image_score: float = 0.20
-    rrf_k: int = 60                 # RRF constant for hybrid image fusion
 
     # Folder names inside storage_path
     minio_bucket_documents: str = "documents"
     minio_bucket_images: str = "images"
 
-    qdrant_collection_text: str = "text_chunks"
-    qdrant_collection_image_visual: str = "image_visual"
-    embedding_dims: int = 384   # multilingual-e5-small = 384 dims
+    # PostgreSQL (auth/RBAC + RAG metadata)
+    database_url: str = "postgresql+asyncpg://localhost/fallback"
+
+    # JWT
+    secret_key: str = "change_in_production"
+    algorithm: str = "HS256"
+    access_token_expire_minutes: int = 480
+
+    # Seed de usuario inicial
+    initial_admin_username: str = "admin"
+    initial_admin_password: str = "admin123"
 
 
 settings = Settings()

@@ -72,6 +72,7 @@ export interface Message {
 export interface ChatRequest {
   message: string;
   conversation_id: string | null;
+  collection_id: string | null;
   document_ids: string[] | null;
 }
 

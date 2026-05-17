@@ -51,14 +51,16 @@ export default function ChatWindow({ messages }: Props) {
   }
 
   return (
-    <div
-      className="flex-1 overflow-y-auto px-4 py-4 space-y-4"
-      style={{ background: 'var(--bg-base)' }}
-    >
-      {messages.map((msg) => (
-        <MessageBubble key={msg.id} message={msg} />
-      ))}
-      <div ref={bottomRef} />
+    <div className="flex-1 relative overflow-hidden">
+      <div
+        className="absolute inset-0 overflow-y-auto px-4 pt-4 pb-28 space-y-4"
+        style={{ background: 'var(--bg-base)' }}
+      >
+        {messages.map((msg) => (
+          <MessageBubble key={msg.id} message={msg} />
+        ))}
+        <div ref={bottomRef} className="h-2" />
+      </div>
     </div>
   );
 }
