@@ -21,11 +21,28 @@ class Settings(BaseSettings):
     # HuggingFace model cache
     hf_cache_dir: str = "./models_cache"
 
-    # LLM + visión: Gemma-4 GGUF via llama-cpp-python
+    # LLM de visión: Gemma-4 GGUF — SOLO para captioning de imágenes durante la ingesta
     llm_gguf_repo: str = "bartowski/google_gemma-4-E4B-it-GGUF"
     llm_gguf_filename: str = "google_gemma-4-E4B-it-Q4_K_M.gguf"
-    # Proyector multimodal para visión (captioning de imágenes)
     llm_mmproj_filename: str = "mmproj-google_gemma-4-E4B-it-f16.gguf"
+    llm_n_ctx: int = 4096
+    llm_n_threads: int = 0      # 0 = auto-detect CPU count
+
+    # LLM de chat: Qwen3-4B GGUF — SOLO para generación de respuestas RAG (texto puro)
+    qwen_gguf_repo: str = "bartowski/Qwen_Qwen3-4B-GGUF"
+    qwen_gguf_filename: str = "Qwen_Qwen3-4B-Q4_K_M.gguf"
+    qwen_n_ctx: int = 8192
+    qwen_max_tokens: int = 1024
+    qwen_temperature: float = 0.7
+    qwen_top_p: float = 0.8
+    qwen_top_k: int = 20
+    qwen_repeat_penalty: float = 1.1
+    # Antepone /no_think al system prompt para deshabilitar thinking mode de Qwen3.5
+    qwen_disable_thinking: bool = True
+
+    # Reranker: BGE-reranker-v2-m3 vía FlagEmbedding (cross-encoder, fuera de inference_queue)
+    reranker_model_id: str = "BAAI/bge-reranker-v2-m3"
+    reranker_use_fp16: bool = True
 
     # Embeddings: BGE-M3 — recuperación simétrica, sin prefijos query:/passage:
     embed_model_id: str = "BAAI/bge-m3"
@@ -35,21 +52,9 @@ class Settings(BaseSettings):
     max_images_per_doc: int = 50
     skip_ocr: bool = False
 
-    # llama-cpp inference settings
-    llm_n_ctx: int = 4096
-    llm_n_threads: int = 0      # 0 = auto-detect CPU count
-    llm_max_tokens: int = 1024
-    llm_repeat_penalty: float = 1.3
-
-    # Retrieval / RAG knobs
-    max_context_chunks: int = 5
-    max_context_images: int = 3
-    min_image_score: float = 0.35
-    image_score_gap: float = 0.80
-
-    # Visual-query mode
-    visual_query_max_images: int = 6
-    visual_query_min_image_score: float = 0.20
+    # Retrieval knobs
+    retrieval_top_k: int = 10   # chunks que se piden a ChromaDB
+    rerank_top_k: int = 3       # items que pasan al prompt tras reranking (texto + imagen unificados)
 
     # Folder names inside storage_path
     minio_bucket_documents: str = "documents"

@@ -3,7 +3,7 @@ import base64
 import logging
 
 from app.cache import embedding_cache
-from app.utils.model_manager import get_embedder, get_llm
+from app.utils.model_manager import get_embedder, get_vision_llm
 from app.utils.inference_queue import inference_queue
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ async def describe_image(image_bytes: bytes) -> str:
     ]
 
     def _run() -> str:
-        llm = get_llm()
+        llm = get_vision_llm()
         response = llm.create_chat_completion(
             messages=messages,
             max_tokens=300,

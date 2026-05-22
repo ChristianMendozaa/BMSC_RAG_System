@@ -25,3 +25,4 @@ bcrypt>=4.0.1
 python-jose[cryptography]>=3.3.0
 asyncpg>=0.29.0
 alembic>=1.13.0
+# FlagEmbedding removido — el reranker usa transformers directamente (compatibilidad con transformers 5.x)

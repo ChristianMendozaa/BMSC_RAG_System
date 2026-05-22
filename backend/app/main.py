@@ -33,8 +33,8 @@ async def lifespan(_app: FastAPI):
     logger.info("Bank Documentation RAG — Iniciando")
     logger.info("=" * 60)
 
-    logger.info("[1/5] Descargando / cargando modelos (Gemma-4 + BGE-M3)...")
-    logger.info("      Primera ejecución descarga ~4 GB — progreso abajo.")
+    logger.info("[1/5] Descargando / cargando modelos (Gemma-4 visión + Qwen3.5 chat + BGE-M3 + reranker)...")
+    logger.info("      Primera ejecución descarga ~8 GB — progreso abajo.")
     await download_and_load_all()
 
     logger.info("[2/5] Conectando a PostgreSQL y creando datos iniciales...")
