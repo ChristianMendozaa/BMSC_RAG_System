@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_permission
 from app.core.security import get_password_hash
+from app.db.models.role import PGRole
 from app.db.models.user import PGUser
 from app.db.schemas.user import (
     PasswordResetRequest,
@@ -14,6 +15,7 @@ from app.db.schemas.user import (
     UserCreate,
     UserOut,
     UserUpdate,
+    UsernameUpdateRequest,
     UsersListResponse,
 )
 from app.db.session import get_pg_db
@@ -87,6 +89,9 @@ async def update_user(
     if body.is_active is False and user_id == current_user.id:
         raise HTTPException(status_code=400, detail="No puedes desactivar tu propia cuenta")
 
+    if body.is_active is False and user.is_system:
+        raise HTTPException(status_code=400, detail="Usuario del sistema, no puede ser desactivado")
+
     if body.username is not None:
         user.username = body.username
     if body.password is not None:
@@ -117,6 +122,19 @@ async def deactivate_user(
     user = await db.scalar(select(PGUser).where(PGUser.id == user_id))
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    if user.is_system:
+        raise HTTPException(status_code=400, detail="Usuario del sistema, no puede ser desactivado")
+
+    if user.role and user.role.name == "SUPERADMIN":
+        active_count = await db.scalar(
+            select(func.count())
+            .select_from(PGUser)
+            .join(PGRole, PGUser.role_id == PGRole.id)
+            .where(PGRole.name == "SUPERADMIN", PGUser.is_active == True, PGUser.id != user_id)  # noqa: E712
+        )
+        if not active_count:
+            raise HTTPException(status_code=400, detail="No se puede desactivar al único SUPERADMIN activo")
 
     user.is_active = False
     await db.commit()
@@ -173,7 +191,44 @@ async def update_user_role(
     user = await db.scalar(select(PGUser).where(PGUser.id == user_id))
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    if user.is_system:
+        raise HTTPException(status_code=400, detail="Usuario del sistema, no se puede cambiar el rol")
+
+    if user.role and user.role.name == "SUPERADMIN":
+        new_role = await db.scalar(select(PGRole).where(PGRole.id == body.role_id)) if body.role_id else None
+        if not new_role or new_role.name != "SUPERADMIN":
+            active_count = await db.scalar(
+                select(func.count())
+                .select_from(PGUser)
+                .join(PGRole, PGUser.role_id == PGRole.id)
+                .where(PGRole.name == "SUPERADMIN", PGUser.is_active == True, PGUser.id != user_id)  # noqa: E712
+            )
+            if not active_count:
+                raise HTTPException(status_code=400, detail="No se puede dejar el sistema sin un SUPERADMIN activo")
+
     user.role_id = body.role_id
     await db.commit()
     updated = await db.scalar(select(PGUser).where(PGUser.id == user_id))
     return updated
+
+
+@router.patch("/{user_id}/username", response_model=UserOut)
+async def update_username(
+    user_id: uuid.UUID,
+    body: UsernameUpdateRequest,
+    db: AsyncSession = Depends(get_pg_db),
+    _: PGUser = Depends(require_permission("can_manage_users")),
+):
+    """Cambia el nombre de usuario. Permitido incluso para usuarios del sistema."""
+    user = await db.scalar(select(PGUser).where(PGUser.id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    user.username = body.username
+    try:
+        await db.commit()
+        updated = await db.scalar(select(PGUser).where(PGUser.id == user_id))
+        return updated
+    except Exception:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="El nombre de usuario ya existe")

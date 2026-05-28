@@ -46,6 +46,7 @@ CREATE TABLE users (
     hashed_password     VARCHAR(255) NOT NULL,
     role_id             UUID         REFERENCES roles(id) ON DELETE SET NULL,
     is_active           BOOLEAN      NOT NULL DEFAULT true,
+    is_system           BOOLEAN      NOT NULL DEFAULT false,
     tokens_valid_after  TIMESTAMPTZ,
     created_by          UUID         REFERENCES users(id),
     created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
@@ -278,6 +279,8 @@ CREATE INDEX idx_users_role_id    ON users(role_id);
 CREATE INDEX idx_users_is_active  ON users(is_active);
 -- Listar rápido usuarios huérfanos (sin rol asignado) en el panel admin.
 CREATE INDEX idx_users_no_role    ON users(id) WHERE role_id IS NULL;
+-- Localizar rápidamente usuarios del sistema (protegidos).
+CREATE INDEX idx_users_is_system  ON users(id) WHERE is_system = true;
 
 CREATE INDEX idx_col_perms_role       ON collection_permissions(role_id);
 CREATE INDEX idx_col_perms_collection ON collection_permissions(collection_id);

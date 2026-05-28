@@ -47,6 +47,7 @@ export interface UserOut {
   id: string;
   username: string;
   is_active: boolean;
+  is_system: boolean;
   role_id: string | null;
   role: RoleInfo | null;
   created_at: string;
@@ -192,6 +193,15 @@ export async function assignUserRole(id: string, roleId: string | null): Promise
     method: 'PATCH',
     headers: getAuthHeaders(),
     body: JSON.stringify({ role_id: roleId }),
+  });
+  return handleResponse<UserOut>(res);
+}
+
+export async function renameUser(id: string, username: string): Promise<UserOut> {
+  const res = await fetch(`${API_URL}/api/users/${id}/username`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ username }),
   });
   return handleResponse<UserOut>(res);
 }

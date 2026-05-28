@@ -24,6 +24,7 @@ class UserOut(BaseModel):
     id: uuid.UUID
     username: str
     is_active: bool
+    is_system: bool
     role_id: uuid.UUID | None = None
     role: RoleOut | None = None
     created_at: datetime
@@ -37,6 +38,10 @@ class PasswordResetRequest(BaseModel):
 
 class RoleAssignRequest(BaseModel):
     role_id: uuid.UUID | None = None
+
+
+class UsernameUpdateRequest(BaseModel):
+    username: str
 
 
 class UsersListResponse(BaseModel):

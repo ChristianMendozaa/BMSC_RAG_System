@@ -1,17 +1,17 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   Users, Shield, FolderOpen, FileText, Plus,
   ChevronDown, ChevronUp, Download, Trash2, Upload,
   CheckCircle2, Circle, Loader2, AlertCircle, RefreshCw, X, UserPlus,
-  ArrowRightLeft, RotateCcw, Search, Key, AlertTriangle,
+  ArrowRightLeft, RotateCcw, Search, Key, AlertTriangle, Eye, EyeOff, Pencil,
 } from 'lucide-react';
 import {
   getRoles, createRole, updateRole, deleteRole,
-  getUsers, createUser, deactivateUser, activateUser, resetUserPassword, assignUserRole,
+  getUsers, createUser, deactivateUser, activateUser, resetUserPassword, assignUserRole, renameUser,
   getCollections, createCollection, deleteCollection, CollectionHasDocumentsError,
   getCollectionRolePerms, updateCollectionRolePerm,
   getCollectionUserPerms, updateCollectionUserPerm, deleteCollectionUserPerm,
@@ -196,6 +196,8 @@ function ResetPasswordModal({
 }) {
   const [pw, setPw] = useState('');
   const [pw2, setPw2] = useState('');
+  const [showPw, setShowPw] = useState(false);
+  const [showPw2, setShowPw2] = useState(false);
   const [busy, setBusy] = useState(false);
   const valid = pw.length >= 4 && pw === pw2;
 
@@ -231,8 +233,22 @@ function ResetPasswordModal({
             Nueva contraseña para <strong>{user.username}</strong>. Esto cerrará todas las sesiones activas del usuario.
           </Dialog.Description>
           <div className="space-y-2">
-            <Input type="password" placeholder="Nueva contraseña" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus />
-            <Input type="password" placeholder="Repetir contraseña" value={pw2} onChange={(e) => setPw2(e.target.value)} />
+            <div className="relative">
+              <Input type={showPw ? 'text' : 'password'} placeholder="Nueva contraseña" value={pw}
+                onChange={(e) => setPw(e.target.value)} autoFocus style={{ paddingRight: 36 }} />
+              <button type="button" tabIndex={-1} onClick={() => setShowPw(v => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }}>
+                {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+            </div>
+            <div className="relative">
+              <Input type={showPw2 ? 'text' : 'password'} placeholder="Repetir contraseña" value={pw2}
+                onChange={(e) => setPw2(e.target.value)} style={{ paddingRight: 36 }} />
+              <button type="button" tabIndex={-1} onClick={() => setShowPw2(v => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }}>
+                {showPw2 ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+            </div>
             {pw && pw2 && pw !== pw2 && (
               <p className="text-xs" style={{ color: '#f87171' }}>Las contraseñas no coinciden</p>
             )}
@@ -334,15 +350,99 @@ function AssignRoleModal({
   );
 }
 
+function RenameUsernameModal({
+  user, onClose, onDone, flash,
+}: {
+  user: UserOut;
+  onClose: () => void;
+  onDone: () => void;
+  flash: (msg: string, type?: 'ok' | 'err') => void;
+}) {
+  const [username, setUsername] = useState(user.username);
+  const [busy, setBusy] = useState(false);
+  const valid = username.trim().length >= 1 && username.trim() !== user.username;
+
+  const save = async () => {
+    if (!valid) return;
+    setBusy(true);
+    try {
+      await renameUser(user.id, username.trim());
+      flash(`Nombre de usuario actualizado a "${username.trim()}"`);
+      onDone();
+      onClose();
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'Error', 'err');
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Dialog.Root open onOpenChange={(o) => { if (!o && !busy) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+        <Dialog.Content
+          className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl p-6 shadow-2xl"
+          style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}
+        >
+          <Dialog.Title
+            className="text-base font-semibold mb-2"
+            style={{ color: 'var(--gold-bright)', fontFamily: 'Playfair Display, serif' }}
+          >
+            Cambiar nombre de usuario
+          </Dialog.Title>
+          <Dialog.Description className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
+            Nuevo nombre para <strong>{user.username}</strong>.
+          </Dialog.Description>
+          <Input
+            type="text"
+            placeholder="Nuevo nombre de usuario"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoFocus
+          />
+          <div className="flex justify-end gap-2 mt-5">
+            <button
+              disabled={busy}
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg text-xs font-medium disabled:opacity-50"
+              style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-surface)' }}
+            >Cancelar</button>
+            <button
+              disabled={busy || !valid}
+              onClick={save}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+              style={{ background: 'var(--gold-bright)', color: '#0A1A10' }}
+            >
+              {busy && <Loader2 size={12} className="animate-spin" />}
+              Guardar
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
   const [users, setUsers] = useState<UserOut[]>([]);
   const [form, setForm] = useState({ username: '', password: '', role_id: '' });
+  const [confirmPw, setConfirmPw] = useState('');
+  const [showPw, setShowPw] = useState(false);
+  const [showConfirmPw, setShowConfirmPw] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; type: 'ok' | 'err' } | null>(null);
   const [confirmDeactivate, setConfirmDeactivate] = useState<{ id: string; username: string } | null>(null);
   const [resetPwUser, setResetPwUser] = useState<UserOut | null>(null);
   const [assignRoleUser, setAssignRoleUser] = useState<UserOut | null>(null);
+  const [renameUsernameUser, setRenameUsernameUser] = useState<UserOut | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
+
+  // Filter state
+  const [userSearch, setUserSearch] = useState('');
+  const [userSearchD, setUserSearchD] = useState('');
+  const [userStatusFilter, setUserStatusFilter] = useState<'' | 'active' | 'inactive'>('');
+  const [userRoleFilter, setUserRoleFilter] = useState<'' | '__none__' | string>('');
+  const [userSort, setUserSort] = useState<'newest' | 'oldest' | 'az'>('newest');
 
   const flash = useCallback((text: string, type: 'ok' | 'err' = 'ok') => {
     setMsg({ text, type });
@@ -355,12 +455,21 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    const t = setTimeout(() => setUserSearchD(userSearch), 250);
+    return () => clearTimeout(t);
+  }, [userSearch]);
+
+  const passwordsValid = form.password.length >= 4 && form.password === confirmPw;
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!passwordsValid) return;
     setBusy(true);
     try {
-      await createUser(form);
+      await createUser({ username: form.username, password: form.password, role_id: form.role_id });
       setForm({ username: '', password: '', role_id: '' });
+      setConfirmPw(''); setShowPw(false); setShowConfirmPw(false);
       await load();
       flash('Usuario creado correctamente');
     } catch (err) { flash(err instanceof Error ? err.message : 'Error', 'err'); }
@@ -387,6 +496,24 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
     setActionBusy(null);
   };
 
+  const filteredUsers = useMemo(() => {
+    let r = [...users];
+    if (userSearchD.trim()) {
+      const q = userSearchD.toLowerCase();
+      r = r.filter(u => u.username.toLowerCase().includes(q));
+    }
+    if (userStatusFilter === 'active')   r = r.filter(u => u.is_active);
+    if (userStatusFilter === 'inactive') r = r.filter(u => !u.is_active);
+    if (userRoleFilter === '__none__')   r = r.filter(u => !u.role_id);
+    else if (userRoleFilter)             r = r.filter(u => u.role_id === userRoleFilter);
+    if (userSort === 'newest') r.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    if (userSort === 'oldest') r.sort((a, b) => a.created_at.localeCompare(b.created_at));
+    if (userSort === 'az')     r.sort((a, b) => a.username.localeCompare(b.username));
+    return r;
+  }, [users, userSearchD, userStatusFilter, userRoleFilter, userSort]);
+
+  const anyUserFilter = userSearch !== '' || userStatusFilter !== '' || userRoleFilter !== '' || userSort !== 'newest';
+
   return (
     <div className="space-y-6">
       {msg && <Toast msg={msg.text} type={msg.type} />}
@@ -395,6 +522,9 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
       )}
       {assignRoleUser && (
         <AssignRoleModal user={assignRoleUser} roles={roles} onClose={() => setAssignRoleUser(null)} onDone={load} flash={flash} />
+      )}
+      {renameUsernameUser && (
+        <RenameUsernameModal user={renameUsernameUser} onClose={() => setRenameUsernameUser(null)} onDone={load} flash={flash} />
       )}
       <ConfirmModal
         open={!!confirmDeactivate}
@@ -412,15 +542,39 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
             type="text" placeholder="Nombre de usuario" required
             value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })}
           />
-          <Input
-            type="password" placeholder="Contraseña" required
-            value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })}
-          />
+          <div className="relative">
+            <Input
+              type={showPw ? 'text' : 'password'} placeholder="Contraseña" required
+              value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })}
+              style={{ paddingRight: 36 }}
+            />
+            <button type="button" tabIndex={-1} onClick={() => setShowPw(v => !v)}
+              className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }}>
+              {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
+            </button>
+          </div>
+          <div className="relative">
+            <Input
+              type={showConfirmPw ? 'text' : 'password'} placeholder="Repetir contraseña" required
+              value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
+              style={{ paddingRight: 36 }}
+            />
+            <button type="button" tabIndex={-1} onClick={() => setShowConfirmPw(v => !v)}
+              className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }}>
+              {showConfirmPw ? <EyeOff size={14} /> : <Eye size={14} />}
+            </button>
+          </div>
+          {form.password && form.password.length < 4 && (
+            <p className="text-xs" style={{ color: '#f87171' }}>Mínimo 4 caracteres</p>
+          )}
+          {form.password && confirmPw && form.password !== confirmPw && (
+            <p className="text-xs" style={{ color: '#f87171' }}>Las contraseñas no coinciden</p>
+          )}
           <Select required value={form.role_id} onChange={(e) => setForm({ ...form, role_id: e.target.value })}>
             <option value="">Seleccionar rol</option>
             {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
           </Select>
-          <BtnPrimary type="submit" disabled={busy}>
+          <BtnPrimary type="submit" disabled={busy || !passwordsValid}>
             <Plus size={14} /> {busy ? 'Creando...' : 'Crear Usuario'}
           </BtnPrimary>
         </form>
@@ -431,11 +585,42 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
           <SectionTitle>Usuarios Registrados</SectionTitle>
           <BtnGhost onClick={load}><RefreshCw size={12} /> Actualizar</BtnGhost>
         </div>
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <div className="relative flex-1 min-w-[180px]">
+            <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} />
+            <Input type="text" placeholder="Buscar por usuario..." value={userSearch}
+              onChange={(e) => setUserSearch(e.target.value)} style={{ paddingLeft: 30 }} />
+          </div>
+          <Select value={userStatusFilter} onChange={(e) => setUserStatusFilter(e.target.value as '' | 'active' | 'inactive')} className="text-xs w-36">
+            <option value="">Todos</option>
+            <option value="active">Activos</option>
+            <option value="inactive">Inactivos</option>
+          </Select>
+          <Select value={userRoleFilter} onChange={(e) => setUserRoleFilter(e.target.value)} className="text-xs w-44">
+            <option value="">Todos los roles</option>
+            <option value="__none__">Sin rol</option>
+            {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </Select>
+          <Select value={userSort} onChange={(e) => setUserSort(e.target.value as 'newest' | 'oldest' | 'az')} className="text-xs w-44">
+            <option value="newest">Más recientes</option>
+            <option value="oldest">Más antiguos</option>
+            <option value="az">Nombre A-Z</option>
+          </Select>
+          {anyUserFilter && (
+            <BtnGhost onClick={() => { setUserSearch(''); setUserStatusFilter(''); setUserRoleFilter(''); setUserSort('newest'); }}>
+              <X size={12} /> Limpiar filtros
+            </BtnGhost>
+          )}
+        </div>
+        <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>{filteredUsers.length} de {users.length} usuarios</p>
         <div className="space-y-2">
           {users.length === 0 && (
             <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No hay usuarios.</p>
           )}
-          {users.map((u) => {
+          {users.length > 0 && filteredUsers.length === 0 && (
+            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No se encontraron usuarios con los filtros aplicados.</p>
+          )}
+          {filteredUsers.map((u) => {
             const noRole = !u.role_id;
             return (
               <div
@@ -451,7 +636,14 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
                     {initials(u.username)}
                   </div>
                   <div>
-                    <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{u.username}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{u.username}</p>
+                      {u.is_system && (
+                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(234,179,8,0.15)', color: '#fbbf24' }}>
+                          sistema
+                        </span>
+                      )}
+                    </div>
                     {noRole ? (
                       <span
                         className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded mt-0.5 border"
@@ -466,7 +658,7 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <StatusBadge ok={u.is_active} label={u.is_active ? 'activo' : 'inactivo'} />
-                  {noRole && (
+                  {noRole && !u.is_system && (
                     <button
                       onClick={() => setAssignRoleUser(u)}
                       className="text-xs px-2 py-1 rounded border transition-colors"
@@ -475,7 +667,7 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
                       Asignar rol
                     </button>
                   )}
-                  {!noRole && (
+                  {!noRole && !u.is_system && (
                     <button
                       onClick={() => setAssignRoleUser(u)}
                       className="text-xs px-2 py-1 rounded border transition-colors"
@@ -492,26 +684,36 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
                   >
                     <Key size={11} /> Contraseña
                   </button>
-                  {u.is_active ? (
-                    <button
-                      onClick={() => setConfirmDeactivate({ id: u.id, username: u.username })}
-                      className="text-xs px-2 py-1 rounded border transition-colors"
-                      style={{ borderColor: 'var(--status-red)', color: '#f87171' }}
-                    >
-                      Desactivar
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => handleActivate(u)}
-                      disabled={actionBusy === u.id}
-                      className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50"
-                      style={{ borderColor: '#2D7A4F', color: '#4ade80' }}
-                    >
-                      {actionBusy === u.id
-                        ? <Loader2 size={11} className="animate-spin" />
-                        : <RotateCcw size={11} />}
-                      Reactivar
-                    </button>
+                  <button
+                    onClick={() => setRenameUsernameUser(u)}
+                    className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors"
+                    style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
+                    title="Cambiar nombre de usuario"
+                  >
+                    <Pencil size={11} /> Nombre
+                  </button>
+                  {!u.is_system && (
+                    u.is_active ? (
+                      <button
+                        onClick={() => setConfirmDeactivate({ id: u.id, username: u.username })}
+                        className="text-xs px-2 py-1 rounded border transition-colors"
+                        style={{ borderColor: 'var(--status-red)', color: '#f87171' }}
+                      >
+                        Desactivar
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleActivate(u)}
+                        disabled={actionBusy === u.id}
+                        className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50"
+                        style={{ borderColor: '#2D7A4F', color: '#4ade80' }}
+                      >
+                        {actionBusy === u.id
+                          ? <Loader2 size={11} className="animate-spin" />
+                          : <RotateCcw size={11} />}
+                        Reactivar
+                      </button>
+                    )
                   )}
                 </div>
               </div>
@@ -664,6 +866,11 @@ function RolesSection({ roles, onRolesChange }: { roles: RoleInfo[]; onRolesChan
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; type: 'ok' | 'err' } | null>(null);
 
+  // Filter state
+  const [roleSearch, setRoleSearch] = useState('');
+  const [roleSearchD, setRoleSearchD] = useState('');
+  const [roleTypeFilter, setRoleTypeFilter] = useState<'' | 'system' | 'custom'>('');
+
   const flash = (text: string, type: 'ok' | 'err' = 'ok') => {
     setMsg({ text, type });
     setTimeout(() => setMsg(null), 3000);
@@ -680,6 +887,24 @@ function RolesSection({ roles, onRolesChange }: { roles: RoleInfo[]; onRolesChan
     } catch (err) { flash(err instanceof Error ? err.message : 'Error', 'err'); }
     setBusy(false);
   };
+
+  useEffect(() => {
+    const t = setTimeout(() => setRoleSearchD(roleSearch), 250);
+    return () => clearTimeout(t);
+  }, [roleSearch]);
+
+  const filteredRoles = useMemo(() => {
+    let r = [...roles];
+    if (roleSearchD.trim()) {
+      const q = roleSearchD.toLowerCase();
+      r = r.filter(ro => ro.name.toLowerCase().includes(q) || (ro.description ?? '').toLowerCase().includes(q));
+    }
+    if (roleTypeFilter === 'system') r = r.filter(ro => ro.is_system);
+    if (roleTypeFilter === 'custom') r = r.filter(ro => !ro.is_system);
+    return r;
+  }, [roles, roleSearchD, roleTypeFilter]);
+
+  const anyRoleFilter = roleSearch !== '' || roleTypeFilter !== '';
 
   return (
     <div className="space-y-6">
@@ -716,11 +941,35 @@ function RolesSection({ roles, onRolesChange }: { roles: RoleInfo[]; onRolesChan
 
       <Card>
         <div className="flex items-center justify-between mb-4">
-          <SectionTitle>Roles del Sistema</SectionTitle>
+          <SectionTitle>Roles</SectionTitle>
           <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Los roles de sistema no se pueden eliminar ni editar sus permisos</span>
         </div>
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <div className="relative flex-1 min-w-[180px]">
+            <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} />
+            <Input type="text" placeholder="Buscar por nombre o descripción..." value={roleSearch}
+              onChange={(e) => setRoleSearch(e.target.value)} style={{ paddingLeft: 30 }} />
+          </div>
+          <Select value={roleTypeFilter} onChange={(e) => setRoleTypeFilter(e.target.value as '' | 'system' | 'custom')} className="text-xs w-48">
+            <option value="">Todos los roles</option>
+            <option value="system">Solo sistema</option>
+            <option value="custom">Solo personalizados</option>
+          </Select>
+          {anyRoleFilter && (
+            <BtnGhost onClick={() => { setRoleSearch(''); setRoleTypeFilter(''); }}>
+              <X size={12} /> Limpiar filtros
+            </BtnGhost>
+          )}
+        </div>
+        <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>{filteredRoles.length} de {roles.length} roles</p>
         <div className="space-y-3">
-          {roles.map((r) => (
+          {roles.length === 0 && (
+            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No hay roles.</p>
+          )}
+          {roles.length > 0 && filteredRoles.length === 0 && (
+            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No se encontraron roles con los filtros aplicados.</p>
+          )}
+          {filteredRoles.map((r) => (
             <RoleCard
               key={r.id}
               role={r}
@@ -1160,6 +1409,12 @@ function ColeccionesSection({ roles }: { roles: RoleInfo[] }) {
   const [rolePermsForm, setRolePermsForm] = useState<DocRolePermsForm>({});
   const [busy, setBusy] = useState(false);
 
+  // Filter state
+  const [colSearch, setColSearch] = useState('');
+  const [colSearchD, setColSearchD] = useState('');
+  const [colStatusFilter, setColStatusFilter] = useState<'' | 'active' | 'inactive'>('');
+  const [colSort, setColSort] = useState<'newest' | 'az'>('newest');
+
   const flash = (text: string, type: 'ok' | 'err' = 'ok') => {
     setMsg({ text, type });
     setTimeout(() => setMsg(null), 3000);
@@ -1174,6 +1429,11 @@ function ColeccionesSection({ roles }: { roles: RoleInfo[] }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const t = setTimeout(() => setColSearchD(colSearch), 250);
+    return () => clearTimeout(t);
+  }, [colSearch]);
 
   const openModal = () => {
     const initial: DocRolePermsForm = {};
@@ -1207,6 +1467,21 @@ function ColeccionesSection({ roles }: { roles: RoleInfo[] }) {
       [roleId]: { ...prev[roleId], [key]: value },
     }));
   };
+
+  const filteredCollections = useMemo(() => {
+    let r = [...collections];
+    if (colSearchD.trim()) {
+      const q = colSearchD.toLowerCase();
+      r = r.filter(c => c.name.toLowerCase().includes(q) || (c.description ?? '').toLowerCase().includes(q));
+    }
+    if (colStatusFilter === 'active')   r = r.filter(c => c.is_active);
+    if (colStatusFilter === 'inactive') r = r.filter(c => !c.is_active);
+    if (colSort === 'az')     r.sort((a, b) => a.name.localeCompare(b.name));
+    if (colSort === 'newest') r.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return r;
+  }, [collections, colSearchD, colStatusFilter, colSort]);
+
+  const anyColFilter = colSearch !== '' || colStatusFilter !== '' || colSort !== 'newest';
 
   return (
     <div className="space-y-6">
@@ -1390,11 +1665,36 @@ function ColeccionesSection({ roles }: { roles: RoleInfo[] }) {
             </BtnPrimary>
           </div>
         </div>
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <div className="relative flex-1 min-w-[180px]">
+            <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} />
+            <Input type="text" placeholder="Buscar por nombre o descripción..." value={colSearch}
+              onChange={(e) => setColSearch(e.target.value)} style={{ paddingLeft: 30 }} />
+          </div>
+          <Select value={colStatusFilter} onChange={(e) => setColStatusFilter(e.target.value as '' | 'active' | 'inactive')} className="text-xs w-36">
+            <option value="">Todas</option>
+            <option value="active">Activas</option>
+            <option value="inactive">Inactivas</option>
+          </Select>
+          <Select value={colSort} onChange={(e) => setColSort(e.target.value as 'newest' | 'az')} className="text-xs w-44">
+            <option value="newest">Más recientes</option>
+            <option value="az">Nombre A-Z</option>
+          </Select>
+          {anyColFilter && (
+            <BtnGhost onClick={() => { setColSearch(''); setColStatusFilter(''); setColSort('newest'); }}>
+              <X size={12} /> Limpiar filtros
+            </BtnGhost>
+          )}
+        </div>
+        <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>{filteredCollections.length} de {collections.length} colecciones</p>
         <div className="space-y-3">
           {collections.length === 0 && (
             <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No hay colecciones. Crea la primera con el botón de arriba.</p>
           )}
-          {collections.map((col) => (
+          {collections.length > 0 && filteredCollections.length === 0 && (
+            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No se encontraron colecciones con los filtros aplicados.</p>
+          )}
+          {filteredCollections.map((col) => (
             <CollectionCard key={col.id} col={col} users={users} roles={roles} onDeleted={load} flash={flash} />
           ))}
         </div>

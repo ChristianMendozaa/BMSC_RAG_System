@@ -28,6 +28,7 @@ async def seed_initial_admin(db: AsyncSession) -> None:
         hashed_password=get_password_hash(settings.initial_admin_password),
         role_id=superadmin_role.id,
         is_active=True,
+        is_system=True,
     )
     db.add(admin_user)
     await db.commit()

@@ -21,6 +21,7 @@ class PGUser(PGBase):
         ForeignKey("roles.id", ondelete="SET NULL"), nullable=True
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     tokens_valid_after: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

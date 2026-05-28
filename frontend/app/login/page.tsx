@@ -27,7 +27,7 @@ export default function LoginPage() {
       await refetch();
 
       const role = data.user.role;
-      if (role && (role.is_system || role.can_manage_users || role.can_manage_collections)) {
+      if (role && (role.can_manage_users || role.can_manage_collections || role.can_upload_documents)) {
         router.push('/admin');
       } else {
         router.push('/chat');
