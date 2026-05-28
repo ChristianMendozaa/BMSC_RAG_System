@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -27,6 +28,7 @@ async def get_current_user(
         payload = decode_token(token)
         user_id_str: str | None = payload.get("sub")
         jti_str: str | None = payload.get("jti")
+        iat_raw = payload.get("iat")
         if user_id_str is None or jti_str is None:
             raise credentials_exception
     except JWTError:
@@ -49,6 +51,24 @@ async def get_current_user(
     )
     if user is None or not user.is_active:
         raise credentials_exception
+
+    # Bloquear sesiones residuales tras reset de contraseña o reactivación:
+    # cualquier token emitido antes de tokens_valid_after se considera inválido.
+    if user.tokens_valid_after is not None and iat_raw is not None:
+        try:
+            issued_at = datetime.fromtimestamp(int(iat_raw), tz=timezone.utc)
+        except (TypeError, ValueError):
+            raise credentials_exception
+        if issued_at < user.tokens_valid_after:
+            raise credentials_exception
+
+    # Usuario sin rol no puede operar — login lo bloquea, esta es la defensa
+    # secundaria si un token quedó vivo cuando se le quitó el rol.
+    if user.role_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Su cuenta no tiene rol asignado. Contacte al administrador.",
+        )
 
     return user
 

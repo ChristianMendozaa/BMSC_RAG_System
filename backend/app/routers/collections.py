@@ -1,7 +1,8 @@
 import uuid
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import and_, select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_permission
@@ -17,6 +18,7 @@ from app.db.schemas.collection import CollectionCreate, CollectionOut, Collectio
 from app.db.schemas.permission import AccessibleCollectionOut, AccessibleDocumentOut
 from app.db.session import get_pg_db
 from app.dependencies import get_current_user
+from app.services import hard_delete
 
 router = APIRouter(prefix="/api/collections", tags=["collections"])
 
@@ -219,14 +221,67 @@ async def update_collection(
     return col
 
 
-@router.delete("/{collection_id}", status_code=204)
+@router.delete("/{collection_id}")
 async def delete_collection(
     collection_id: uuid.UUID,
+    action: Literal["auto", "obsolete", "delete"] = Query("auto"),
     db: AsyncSession = Depends(get_pg_db),
     _: PGUser = Depends(_manage_dep),
 ):
+    """
+    Elimina una colección.
+
+    - Si la colección no tiene documentos → hard delete inmediato.
+    - Si tiene documentos:
+      - action="auto" → 409 con conteo, para que el frontend pida decisión.
+      - action="obsolete" → documentos pasan a OBSOLETE + collection_id=NULL,
+        luego se borra la colección.
+      - action="delete" → hard delete de cada documento (archivos, chunks,
+        vectores) y luego de la colección.
+    """
     col = await db.scalar(select(Collection).where(Collection.id == collection_id))
     if not col:
         raise HTTPException(status_code=404, detail="Colección no encontrada")
-    col.is_active = False
+
+    doc_count = await db.scalar(
+        select(func.count(PGDocument.id)).where(PGDocument.collection_id == collection_id)
+    )
+    doc_count = int(doc_count or 0)
+
+    if doc_count == 0:
+        await db.delete(col)
+        await db.commit()
+        return {"deleted": True, "has_documents": False, "document_count": 0}
+
+    if action == "auto":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "has_documents": True,
+                "document_count": doc_count,
+                "message": "La colección tiene documentos. Indique action=obsolete o action=delete.",
+            },
+        )
+
+    if action == "obsolete":
+        docs_result = await db.execute(
+            select(PGDocument).where(PGDocument.collection_id == collection_id)
+        )
+        for doc in docs_result.scalars():
+            doc.status = "OBSOLETE"
+            doc.collection_id = None
+        await db.flush()
+        await db.delete(col)
+        await db.commit()
+        return {"deleted": True, "has_documents": True, "document_count": doc_count, "obsoleted": doc_count}
+
+    # action == "delete"
+    docs_result = await db.execute(
+        select(PGDocument.id).where(PGDocument.collection_id == collection_id)
+    )
+    doc_ids = [row[0] for row in docs_result.all()]
+    for doc_id in doc_ids:
+        await hard_delete.hard_delete_document(db, doc_id)
+    await db.delete(col)
     await db.commit()
+    return {"deleted": True, "has_documents": True, "document_count": doc_count, "purged": len(doc_ids)}

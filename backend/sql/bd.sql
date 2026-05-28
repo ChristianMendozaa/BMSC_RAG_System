@@ -33,15 +33,23 @@ CREATE TABLE roles (
 --  created_by es nullable para el primer superadmin (no tiene
 --  quién lo haya creado).
 -- ------------------------------------------------------------
+-- role_id es nullable: cuando se elimina un rol custom, los usuarios que lo
+-- tenían quedan huérfanos (role_id = NULL). Un admin debe asignarles otro rol
+-- antes de que puedan loguearse de nuevo (el login bloquea usuarios sin rol).
+--
+-- tokens_valid_after: marca temporal que invalida todos los JWT emitidos antes
+-- de ese instante. Se actualiza cuando un admin resetea la contraseña o
+-- reactiva al usuario, forzando re-login sin necesidad de tracking de JTIs.
 CREATE TABLE users (
-    id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-    username        VARCHAR(100) NOT NULL UNIQUE,
-    hashed_password VARCHAR(255) NOT NULL,
-    role_id         UUID         NOT NULL REFERENCES roles(id),
-    is_active       BOOLEAN      NOT NULL DEFAULT true,
-    created_by      UUID         REFERENCES users(id),
-    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    id                  UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    username            VARCHAR(100) NOT NULL UNIQUE,
+    hashed_password     VARCHAR(255) NOT NULL,
+    role_id             UUID         REFERENCES roles(id) ON DELETE SET NULL,
+    is_active           BOOLEAN      NOT NULL DEFAULT true,
+    tokens_valid_after  TIMESTAMPTZ,
+    created_by          UUID         REFERENCES users(id),
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 
@@ -94,11 +102,16 @@ CREATE TABLE user_collection_permissions (
 
 -- ------------------------------------------------------------
 --  DOCUMENTS  (registro lógico — no guarda el archivo)
+--  collection_id es nullable: documentos sin colección quedan en la
+--  categoría "Sin colección" (puede pasar al subir sin asignar, o cuando
+--  se elimina la colección y se opta por marcar los docs como obsoletos).
+--  ON DELETE SET NULL: al borrar una colección con documentos en modo
+--  "obsoletizar", los documentos sobreviven sin colección.
 -- ------------------------------------------------------------
 CREATE TABLE documents (
     id            UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     title         VARCHAR(500)    NOT NULL,
-    collection_id UUID            NOT NULL REFERENCES collections(id),
+    collection_id UUID            REFERENCES collections(id) ON DELETE SET NULL,
     status        document_status NOT NULL DEFAULT 'ACTIVE',
     created_by    UUID            REFERENCES users(id),
     created_at    TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
@@ -253,6 +266,8 @@ CREATE TABLE conversations (
 
 CREATE INDEX idx_users_role_id    ON users(role_id);
 CREATE INDEX idx_users_is_active  ON users(is_active);
+-- Listar rápido usuarios huérfanos (sin rol asignado) en el panel admin.
+CREATE INDEX idx_users_no_role    ON users(id) WHERE role_id IS NULL;
 
 CREATE INDEX idx_col_perms_role       ON collection_permissions(role_id);
 CREATE INDEX idx_col_perms_collection ON collection_permissions(collection_id);
@@ -260,8 +275,10 @@ CREATE INDEX idx_col_perms_collection ON collection_permissions(collection_id);
 CREATE INDEX idx_user_col_perms_user  ON user_collection_permissions(user_id);
 CREATE INDEX idx_user_col_perms_col   ON user_collection_permissions(collection_id);
 
-CREATE INDEX idx_documents_collection ON documents(collection_id);
-CREATE INDEX idx_documents_status     ON documents(status);
+CREATE INDEX idx_documents_collection     ON documents(collection_id);
+CREATE INDEX idx_documents_status         ON documents(status);
+-- Filtro "solo sin colección" en el panel admin.
+CREATE INDEX idx_documents_uncategorized  ON documents(id) WHERE collection_id IS NULL;
 
 -- Permisos de documento por rol y por usuario
 CREATE INDEX idx_role_doc_perms_role ON role_document_permissions(role_id);

@@ -24,11 +24,19 @@ class UserOut(BaseModel):
     id: uuid.UUID
     username: str
     is_active: bool
-    role_id: uuid.UUID
-    role: RoleOut
+    role_id: uuid.UUID | None = None
+    role: RoleOut | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class PasswordResetRequest(BaseModel):
+    new_password: str
+
+
+class RoleAssignRequest(BaseModel):
+    role_id: uuid.UUID | None = None
 
 
 class UsersListResponse(BaseModel):

@@ -34,6 +34,11 @@ async def login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Usuario inactivo",
         )
+    if user.role_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Su cuenta no tiene rol asignado. Contacte al administrador.",
+        )
 
     jti = uuid.uuid4()
     token = create_access_token(user_id=user.id, jti=jti)

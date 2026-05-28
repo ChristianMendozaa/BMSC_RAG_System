@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
@@ -7,7 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import require_permission
 from app.core.security import get_password_hash
 from app.db.models.user import PGUser
-from app.db.schemas.user import UserCreate, UserOut, UserUpdate, UsersListResponse
+from app.db.schemas.user import (
+    PasswordResetRequest,
+    RoleAssignRequest,
+    UserCreate,
+    UserOut,
+    UserUpdate,
+    UsersListResponse,
+)
 from app.db.session import get_pg_db
 from app.dependencies import get_current_user
 
@@ -112,3 +120,60 @@ async def deactivate_user(
 
     user.is_active = False
     await db.commit()
+
+
+@router.post("/{user_id}/activate", response_model=UserOut)
+async def activate_user(
+    user_id: uuid.UUID,
+    db: AsyncSession = Depends(get_pg_db),
+    _: PGUser = Depends(require_permission("can_manage_users")),
+):
+    """Reactiva un usuario inactivo. Invalida sesiones residuales por precaución."""
+    user = await db.scalar(select(PGUser).where(PGUser.id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    user.is_active = True
+    user.tokens_valid_after = datetime.now(timezone.utc)
+    await db.commit()
+    updated = await db.scalar(select(PGUser).where(PGUser.id == user_id))
+    return updated
+
+
+@router.post("/{user_id}/reset-password", status_code=204)
+async def reset_user_password(
+    user_id: uuid.UUID,
+    body: PasswordResetRequest,
+    db: AsyncSession = Depends(get_pg_db),
+    _: PGUser = Depends(require_permission("can_manage_users")),
+):
+    """
+    Admin resetea la contraseña de un usuario. Setea tokens_valid_after=NOW()
+    para invalidar todas las sesiones activas del usuario.
+    """
+    if not body.new_password or len(body.new_password) < 4:
+        raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 4 caracteres")
+
+    user = await db.scalar(select(PGUser).where(PGUser.id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    user.hashed_password = get_password_hash(body.new_password)
+    user.tokens_valid_after = datetime.now(timezone.utc)
+    await db.commit()
+
+
+@router.patch("/{user_id}/role", response_model=UserOut)
+async def update_user_role(
+    user_id: uuid.UUID,
+    body: RoleAssignRequest,
+    db: AsyncSession = Depends(get_pg_db),
+    _: PGUser = Depends(require_permission("can_manage_users")),
+):
+    """Asigna (o quita) el rol de un usuario. Pensado para usuarios huérfanos."""
+    user = await db.scalar(select(PGUser).where(PGUser.id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    user.role_id = body.role_id
+    await db.commit()
+    updated = await db.scalar(select(PGUser).where(PGUser.id == user_id))
+    return updated

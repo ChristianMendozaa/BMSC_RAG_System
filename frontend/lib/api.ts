@@ -28,7 +28,7 @@ export interface UserInfo {
   id: string;
   username: string;
   is_active: boolean;
-  role: RoleInfo;
+  role: RoleInfo | null;
 }
 
 export interface LoginResponse {
@@ -41,8 +41,8 @@ export interface UserOut {
   id: string;
   username: string;
   is_active: boolean;
-  role_id: string;
-  role: RoleInfo;
+  role_id: string | null;
+  role: RoleInfo | null;
   created_at: string;
 }
 
@@ -90,8 +90,13 @@ export async function login(username: string, password: string): Promise<LoginRe
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
   });
-  if (res.status === 401) throw new Error('Credenciales incorrectas');
-  if (!res.ok) throw new Error(`Error al iniciar sesión: ${res.status}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: '' }));
+    const detail = (err as { detail?: string }).detail;
+    if (res.status === 401) throw new Error(detail || 'Credenciales incorrectas');
+    if (res.status === 403) throw new Error(detail || 'Acceso denegado');
+    throw new Error(detail || `Error al iniciar sesión: ${res.status}`);
+  }
   return res.json() as Promise<LoginResponse>;
 }
 
@@ -157,6 +162,32 @@ export async function deactivateUser(id: string): Promise<void> {
     headers: getAuthHeaders(),
   });
   return handleResponse<void>(res);
+}
+
+export async function activateUser(id: string): Promise<UserOut> {
+  const res = await fetch(`${API_URL}/api/users/${id}/activate`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<UserOut>(res);
+}
+
+export async function resetUserPassword(id: string, newPassword: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/users/${id}/reset-password`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ new_password: newPassword }),
+  });
+  return handleResponse<void>(res);
+}
+
+export async function assignUserRole(id: string, roleId: string | null): Promise<UserOut> {
+  const res = await fetch(`${API_URL}/api/users/${id}/role`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ role_id: roleId }),
+  });
+  return handleResponse<UserOut>(res);
 }
 
 // ── Roles CRUD ─────────────────────────────────────────────────────────────
@@ -248,12 +279,37 @@ export async function updateCollection(
   return handleResponse<CollectionOut>(res);
 }
 
-export async function deleteCollection(id: string): Promise<void> {
-  const res = await fetch(`${API_URL}/api/collections/${id}`, {
+export interface DeleteCollectionResult {
+  deleted: boolean;
+  has_documents: boolean;
+  document_count: number;
+  obsoleted?: number;
+  purged?: number;
+}
+
+export class CollectionHasDocumentsError extends Error {
+  document_count: number;
+  constructor(count: number, message?: string) {
+    super(message || 'La colección tiene documentos');
+    this.name = 'CollectionHasDocumentsError';
+    this.document_count = count;
+  }
+}
+
+export async function deleteCollection(
+  id: string,
+  action: 'auto' | 'obsolete' | 'delete' = 'auto',
+): Promise<DeleteCollectionResult> {
+  const res = await fetch(`${API_URL}/api/collections/${id}?action=${action}`, {
     method: 'DELETE',
     headers: getAuthHeaders(),
   });
-  return handleResponse<void>(res);
+  if (res.status === 409) {
+    const err = await res.json().catch(() => ({}));
+    const detail = (err as { detail?: { document_count?: number } }).detail;
+    throw new CollectionHasDocumentsError(detail?.document_count ?? 0);
+  }
+  return handleResponse<DeleteCollectionResult>(res);
 }
 
 // ── PG Documents ───────────────────────────────────────────────────
@@ -261,8 +317,8 @@ export async function deleteCollection(id: string): Promise<void> {
 export interface PgDocumentOut {
   doc_id: string;
   title: string;
-  collection_id: string;
-  collection_name: string;
+  collection_id: string | null;
+  collection_name: string | null;
   original_filename: string;
   mime_type: string;
   file_size_bytes: number;
@@ -271,17 +327,35 @@ export interface PgDocumentOut {
   rag_chunk_count: number;
   rag_image_count: number;
   created_at: string;
+  updated_at: string;
 }
 
-export async function getPgDocuments(): Promise<PgDocumentOut[]> {
-  const res = await fetch(`${API_URL}/api/pg-documents`, { headers: getAuthHeaders() });
+export interface PgDocumentsFilters {
+  search?: string;
+  collection_id?: string;
+  status?: 'ACTIVE' | 'OBSOLETE';
+  uncategorized?: boolean;
+  sort?: 'newest' | 'oldest_obsolete' | 'name';
+}
+
+export async function getPgDocuments(filters: PgDocumentsFilters = {}): Promise<PgDocumentOut[]> {
+  const params = new URLSearchParams();
+  if (filters.search) params.set('search', filters.search);
+  if (filters.uncategorized) params.set('uncategorized', 'true');
+  else if (filters.collection_id) params.set('collection_id', filters.collection_id);
+  if (filters.status) params.set('status', filters.status);
+  if (filters.sort) params.set('sort', filters.sort);
+  const qs = params.toString();
+  const res = await fetch(`${API_URL}/api/pg-documents${qs ? `?${qs}` : ''}`, {
+    headers: getAuthHeaders(),
+  });
   return handleResponse<PgDocumentOut[]>(res);
 }
 
 export async function uploadToCollection(
   collectionId: string,
   file: File,
-): Promise<{ doc_id: string; filename: string; collection_id: string; status: string }> {
+): Promise<{ doc_id: string; filename: string; collection_id: string | null; status: string }> {
   const form = new FormData();
   form.append('file', file);
   const res = await fetch(`${API_URL}/api/collections/${collectionId}/upload`, {
@@ -289,7 +363,54 @@ export async function uploadToCollection(
     headers: getAuthHeaders(true),
     body: form,
   });
-  return handleResponse<{ doc_id: string; filename: string; collection_id: string; status: string }>(res);
+  return handleResponse<{ doc_id: string; filename: string; collection_id: string | null; status: string }>(res);
+}
+
+export async function uploadPgDocument(
+  file: File,
+  collectionId: string | null,
+): Promise<{ doc_id: string; filename: string; collection_id: string | null; status: string }> {
+  const form = new FormData();
+  form.append('file', file);
+  if (collectionId) form.append('collection_id', collectionId);
+  const res = await fetch(`${API_URL}/api/pg-documents/upload`, {
+    method: 'POST',
+    headers: getAuthHeaders(true),
+    body: form,
+  });
+  return handleResponse<{ doc_id: string; filename: string; collection_id: string | null; status: string }>(res);
+}
+
+export async function updatePgDocument(
+  docId: string,
+  patch: { title?: string; collection_id?: string | null },
+): Promise<PgDocumentOut> {
+  const body: { title?: string; collection_id?: string; clear_collection?: boolean } = {};
+  if (patch.title !== undefined) body.title = patch.title;
+  if (patch.collection_id === null) body.clear_collection = true;
+  else if (patch.collection_id !== undefined) body.collection_id = patch.collection_id;
+  const res = await fetch(`${API_URL}/api/pg-documents/${docId}`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  });
+  return handleResponse<PgDocumentOut>(res);
+}
+
+export async function reactivatePgDocument(docId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/pg-documents/${docId}/reactivate`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<void>(res);
+}
+
+export async function permanentDeletePgDocument(docId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/pg-documents/${docId}/permanent`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<void>(res);
 }
 
 export async function downloadDocument(docId: string, filename: string): Promise<void> {

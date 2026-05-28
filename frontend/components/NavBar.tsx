@@ -81,7 +81,7 @@ export default function NavBar() {
                 {user.username}
               </p>
               <p className="text-xs" style={{ color: 'var(--gold-muted)' }}>
-                {user.role.name}
+                {user.role?.name ?? 'Sin rol'}
               </p>
             </div>
             <button
@@ -167,7 +167,7 @@ export default function NavBar() {
                     {user.username}
                   </p>
                   <p className="text-xs" style={{ color: 'var(--gold-muted)' }}>
-                    {user.role.name}
+                    {user.role?.name ?? 'Sin rol'}
                   </p>
                 </div>
                 <button

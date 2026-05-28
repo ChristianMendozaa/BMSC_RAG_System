@@ -18,12 +18,12 @@ def get_password_hash(password: str) -> str:
 def create_access_token(user_id: uuid.UUID, jti: uuid.UUID | None = None) -> str:
     if jti is None:
         jti = uuid.uuid4()
-    expire = datetime.now(timezone.utc) + timedelta(
-        minutes=settings.access_token_expire_minutes
-    )
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=settings.access_token_expire_minutes)
     payload = {
         "sub": str(user_id),
         "jti": str(jti),
+        "iat": now,
         "exp": expire,
     }
     return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)

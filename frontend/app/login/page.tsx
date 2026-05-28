@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import * as Dialog from '@radix-ui/react-dialog';
 import { login } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
@@ -10,6 +11,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [forgotOpen, setForgotOpen] = useState(false);
   const router = useRouter();
   const { refetch } = useAuth();
 
@@ -25,7 +27,7 @@ export default function LoginPage() {
       await refetch();
 
       const role = data.user.role;
-      if (role.is_system || role.can_manage_users || role.can_manage_collections) {
+      if (role && (role.is_system || role.can_manage_users || role.can_manage_collections)) {
         router.push('/admin');
       } else {
         router.push('/chat');
@@ -107,8 +109,49 @@ export default function LoginPage() {
           >
             {loading ? 'Ingresando...' : 'Ingresar'}
           </button>
+          <div className="text-center pt-2">
+            <button
+              type="button"
+              onClick={() => setForgotOpen(true)}
+              className="text-xs underline hover:no-underline"
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              ¿Olvidó su contraseña?
+            </button>
+          </div>
         </form>
       </div>
+
+      <Dialog.Root open={forgotOpen} onOpenChange={setForgotOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+          <Dialog.Content
+            className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl p-6 shadow-2xl"
+            style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}
+          >
+            <Dialog.Title
+              className="text-base font-semibold mb-2"
+              style={{ color: 'var(--gold-bright)', fontFamily: 'Playfair Display, serif' }}
+            >
+              Recuperar contraseña
+            </Dialog.Title>
+            <Dialog.Description className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+              Por seguridad, las contraseñas no se pueden recuperar desde aquí.
+              Comuníquese con el <strong>encargado del sistema</strong> para que reestablezca su contraseña.
+            </Dialog.Description>
+            <div className="flex justify-end mt-5">
+              <Dialog.Close asChild>
+                <button
+                  className="px-4 py-2 rounded-lg text-xs font-semibold"
+                  style={{ background: 'var(--gold-bright)', color: '#0A1A10' }}
+                >
+                  Entendido
+                </button>
+              </Dialog.Close>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 }

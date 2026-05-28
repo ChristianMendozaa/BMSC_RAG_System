@@ -19,8 +19,8 @@ class PGDocument(PGBase):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
-    collection_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("collections.id"), nullable=False
+    collection_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("collections.id", ondelete="SET NULL"), nullable=True
     )
     status: Mapped[str] = mapped_column(
         document_status_enum, nullable=False, default="ACTIVE"

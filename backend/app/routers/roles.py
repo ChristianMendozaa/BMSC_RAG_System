@@ -95,12 +95,17 @@ async def update_role(
     return role
 
 
-@router.delete("/{role_id}", status_code=204)
+@router.delete("/{role_id}")
 async def delete_role(
     role_id: uuid.UUID,
     db: AsyncSession = Depends(get_pg_db),
     _: PGUser = Depends(require_permission("can_manage_users")),
 ):
+    """
+    Elimina un rol custom. Los usuarios que lo tenían quedan con role_id=NULL
+    (vía ON DELETE SET NULL) y no pueden loguearse hasta que un admin les
+    asigne otro rol.
+    """
     role = await db.scalar(select(PGRole).where(PGRole.id == role_id))
     if not role:
         raise HTTPException(status_code=404, detail="Rol no encontrado")
@@ -108,14 +113,11 @@ async def delete_role(
     if role.is_system:
         raise HTTPException(status_code=400, detail="Rol del sistema, no eliminable")
 
-    user_count = await db.scalar(
+    affected_users = await db.scalar(
         select(func.count()).select_from(PGUser).where(PGUser.role_id == role_id)
     )
-    if user_count and user_count > 0:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Existen {user_count} usuario(s) con este rol — reasígnalos primero",
-        )
+    affected_users = int(affected_users or 0)
 
     await db.delete(role)
     await db.commit()
+    return {"deleted": True, "affected_users": affected_users}

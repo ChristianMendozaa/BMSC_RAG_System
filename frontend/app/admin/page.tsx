@@ -7,21 +7,31 @@ import {
   Users, Shield, FolderOpen, FileText, Plus,
   ChevronDown, ChevronUp, Download, Trash2, Upload,
   CheckCircle2, Circle, Loader2, AlertCircle, RefreshCw, X, UserPlus,
+  ArrowRightLeft, RotateCcw, Search, Key, AlertTriangle,
 } from 'lucide-react';
 import {
   getRoles, createRole, updateRole, deleteRole,
-  getUsers, createUser, deactivateUser,
-  getCollections, createCollection,
+  getUsers, createUser, deactivateUser, activateUser, resetUserPassword, assignUserRole,
+  getCollections, createCollection, deleteCollection, CollectionHasDocumentsError,
   getCollectionRolePerms, updateCollectionRolePerm,
   getCollectionUserPerms, updateCollectionUserPerm, deleteCollectionUserPerm,
-  getPgDocuments, uploadToCollection, downloadDocument, deletePgDocument,
+  getPgDocuments, uploadToCollection, uploadPgDocument, downloadDocument, deletePgDocument,
+  updatePgDocument, reactivatePgDocument, permanentDeletePgDocument,
   getDocumentUserPerms, updateDocumentUserPerm, deleteDocumentUserPerm,
 } from '@/lib/api';
 import type {
   RoleInfo, UserOut, CollectionOut, RolePermEntry, UserPermEntry, PgDocumentOut, DocUserPermEntry,
+  PgDocumentsFilters,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import ConfirmModal from '@/components/ui/ConfirmModal';
+
+// Roles asignables a colecciones: excluye SUPERADMIN y ADMIN (siempre tienen
+// acceso total por sus permisos globales); deja VISITANTE + cualquier custom.
+const ROLE_NAMES_HIDDEN_IN_COLLECTIONS = new Set(['SUPERADMIN', 'ADMIN']);
+function selectableCollectionRoles(roles: RoleInfo[]): RoleInfo[] {
+  return roles.filter((r) => !ROLE_NAMES_HIDDEN_IN_COLLECTIONS.has(r.name));
+}
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -176,17 +186,168 @@ function Toast({ msg, type }: { msg: string; type: 'ok' | 'err' }) {
 
 // ── SECTION: Usuarios ──────────────────────────────────────────────────────
 
+function ResetPasswordModal({
+  user, onClose, onDone, flash,
+}: {
+  user: UserOut;
+  onClose: () => void;
+  onDone: () => void;
+  flash: (msg: string, type?: 'ok' | 'err') => void;
+}) {
+  const [pw, setPw] = useState('');
+  const [pw2, setPw2] = useState('');
+  const [busy, setBusy] = useState(false);
+  const valid = pw.length >= 4 && pw === pw2;
+
+  const save = async () => {
+    if (!valid) return;
+    setBusy(true);
+    try {
+      await resetUserPassword(user.id, pw);
+      flash(`Contraseña actualizada para ${user.username}. Sus sesiones activas fueron cerradas.`);
+      onDone();
+      onClose();
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'Error', 'err');
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Dialog.Root open onOpenChange={(o) => { if (!o && !busy) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+        <Dialog.Content
+          className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl p-6 shadow-2xl"
+          style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}
+        >
+          <Dialog.Title
+            className="text-base font-semibold mb-2"
+            style={{ color: 'var(--gold-bright)', fontFamily: 'Playfair Display, serif' }}
+          >
+            Cambiar contraseña
+          </Dialog.Title>
+          <Dialog.Description className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
+            Nueva contraseña para <strong>{user.username}</strong>. Esto cerrará todas las sesiones activas del usuario.
+          </Dialog.Description>
+          <div className="space-y-2">
+            <Input type="password" placeholder="Nueva contraseña" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus />
+            <Input type="password" placeholder="Repetir contraseña" value={pw2} onChange={(e) => setPw2(e.target.value)} />
+            {pw && pw2 && pw !== pw2 && (
+              <p className="text-xs" style={{ color: '#f87171' }}>Las contraseñas no coinciden</p>
+            )}
+            {pw && pw.length < 4 && (
+              <p className="text-xs" style={{ color: '#f87171' }}>Mínimo 4 caracteres</p>
+            )}
+          </div>
+          <div className="flex justify-end gap-2 mt-5">
+            <button
+              disabled={busy}
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg text-xs font-medium disabled:opacity-50"
+              style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-surface)' }}
+            >Cancelar</button>
+            <button
+              disabled={busy || !valid}
+              onClick={save}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+              style={{ background: 'var(--gold-bright)', color: '#0A1A10' }}
+            >
+              {busy && <Loader2 size={12} className="animate-spin" />}
+              Guardar contraseña
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function AssignRoleModal({
+  user, roles, onClose, onDone, flash,
+}: {
+  user: UserOut;
+  roles: RoleInfo[];
+  onClose: () => void;
+  onDone: () => void;
+  flash: (msg: string, type?: 'ok' | 'err') => void;
+}) {
+  const [roleId, setRoleId] = useState<string>(user.role_id ?? '');
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    if (!roleId) return;
+    setBusy(true);
+    try {
+      await assignUserRole(user.id, roleId);
+      flash(`Rol asignado a ${user.username}`);
+      onDone();
+      onClose();
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'Error', 'err');
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Dialog.Root open onOpenChange={(o) => { if (!o && !busy) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+        <Dialog.Content
+          className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl p-6 shadow-2xl"
+          style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}
+        >
+          <Dialog.Title
+            className="text-base font-semibold mb-2"
+            style={{ color: 'var(--gold-bright)', fontFamily: 'Playfair Display, serif' }}
+          >
+            Asignar rol
+          </Dialog.Title>
+          <Dialog.Description className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
+            Asignar un rol a <strong>{user.username}</strong>.
+            {!user.role_id && <span> Sin rol no puede iniciar sesión.</span>}
+          </Dialog.Description>
+          <Select value={roleId} onChange={(e) => setRoleId(e.target.value)}>
+            <option value="">Seleccionar rol</option>
+            {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </Select>
+          <div className="flex justify-end gap-2 mt-5">
+            <button
+              disabled={busy}
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg text-xs font-medium disabled:opacity-50"
+              style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-surface)' }}
+            >Cancelar</button>
+            <button
+              disabled={busy || !roleId}
+              onClick={save}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+              style={{ background: 'var(--gold-bright)', color: '#0A1A10' }}
+            >
+              {busy && <Loader2 size={12} className="animate-spin" />}
+              Asignar
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
   const [users, setUsers] = useState<UserOut[]>([]);
   const [form, setForm] = useState({ username: '', password: '', role_id: '' });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; type: 'ok' | 'err' } | null>(null);
   const [confirmDeactivate, setConfirmDeactivate] = useState<{ id: string; username: string } | null>(null);
+  const [resetPwUser, setResetPwUser] = useState<UserOut | null>(null);
+  const [assignRoleUser, setAssignRoleUser] = useState<UserOut | null>(null);
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
 
-  const flash = (text: string, type: 'ok' | 'err' = 'ok') => {
+  const flash = useCallback((text: string, type: 'ok' | 'err' = 'ok') => {
     setMsg({ text, type });
     setTimeout(() => setMsg(null), 3000);
-  };
+  }, []);
 
   const load = useCallback(async () => {
     try { const r = await getUsers(); setUsers(r.items); } catch {}
@@ -206,10 +367,6 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
     setBusy(false);
   };
 
-  const handleDeactivate = (id: string, username: string) => {
-    setConfirmDeactivate({ id, username });
-  };
-
   const doDeactivate = async () => {
     if (!confirmDeactivate) return;
     try {
@@ -220,9 +377,25 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
     setConfirmDeactivate(null);
   };
 
+  const handleActivate = async (u: UserOut) => {
+    setActionBusy(u.id);
+    try {
+      await activateUser(u.id);
+      await load();
+      flash(`Usuario ${u.username} reactivado`);
+    } catch (err) { flash(err instanceof Error ? err.message : 'Error', 'err'); }
+    setActionBusy(null);
+  };
+
   return (
     <div className="space-y-6">
       {msg && <Toast msg={msg.text} type={msg.type} />}
+      {resetPwUser && (
+        <ResetPasswordModal user={resetPwUser} onClose={() => setResetPwUser(null)} onDone={load} flash={flash} />
+      )}
+      {assignRoleUser && (
+        <AssignRoleModal user={assignRoleUser} roles={roles} onClose={() => setAssignRoleUser(null)} onDone={load} flash={flash} />
+      )}
       <ConfirmModal
         open={!!confirmDeactivate}
         onOpenChange={(o) => { if (!o) setConfirmDeactivate(null); }}
@@ -262,38 +435,88 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
           {users.length === 0 && (
             <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No hay usuarios.</p>
           )}
-          {users.map((u) => (
-            <div
-              key={u.id}
-              className="flex items-center justify-between px-4 py-3 rounded-lg"
-              style={{ background: 'var(--bg-elevated)' }}
-            >
-              <div className="flex items-center gap-3">
-                <div
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold"
-                  style={{ background: 'var(--gold-subtle)', color: 'var(--gold-bright)' }}
-                >
-                  {initials(u.username)}
-                </div>
-                <div>
-                  <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{u.username}</p>
-                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{u.role.name}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <StatusBadge ok={u.is_active} label={u.is_active ? 'activo' : 'inactivo'} />
-                {u.is_active && (
-                  <button
-                    onClick={() => handleDeactivate(u.id, u.username)}
-                    className="text-xs px-2 py-1 rounded border transition-colors"
-                    style={{ borderColor: 'var(--status-red)', color: '#f87171' }}
+          {users.map((u) => {
+            const noRole = !u.role_id;
+            return (
+              <div
+                key={u.id}
+                className="flex items-center justify-between px-4 py-3 rounded-lg flex-wrap gap-2"
+                style={{ background: 'var(--bg-elevated)' }}
+              >
+                <div className="flex items-center gap-3">
+                  <div
+                    className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold"
+                    style={{ background: 'var(--gold-subtle)', color: 'var(--gold-bright)' }}
                   >
-                    Desactivar
+                    {initials(u.username)}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{u.username}</p>
+                    {noRole ? (
+                      <span
+                        className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded mt-0.5 border"
+                        style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', borderColor: 'rgba(245, 158, 11, 0.4)' }}
+                      >
+                        <AlertTriangle size={10} /> Sin rol
+                      </span>
+                    ) : (
+                      <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{u.role?.name}</p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <StatusBadge ok={u.is_active} label={u.is_active ? 'activo' : 'inactivo'} />
+                  {noRole && (
+                    <button
+                      onClick={() => setAssignRoleUser(u)}
+                      className="text-xs px-2 py-1 rounded border transition-colors"
+                      style={{ borderColor: 'rgba(245, 158, 11, 0.5)', color: '#fbbf24' }}
+                    >
+                      Asignar rol
+                    </button>
+                  )}
+                  {!noRole && (
+                    <button
+                      onClick={() => setAssignRoleUser(u)}
+                      className="text-xs px-2 py-1 rounded border transition-colors"
+                      style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
+                    >
+                      Cambiar rol
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setResetPwUser(u)}
+                    className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors"
+                    style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
+                    title="Restablecer contraseña"
+                  >
+                    <Key size={11} /> Contraseña
                   </button>
-                )}
+                  {u.is_active ? (
+                    <button
+                      onClick={() => setConfirmDeactivate({ id: u.id, username: u.username })}
+                      className="text-xs px-2 py-1 rounded border transition-colors"
+                      style={{ borderColor: 'var(--status-red)', color: '#f87171' }}
+                    >
+                      Desactivar
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleActivate(u)}
+                      disabled={actionBusy === u.id}
+                      className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50"
+                      style={{ borderColor: '#2D7A4F', color: '#4ade80' }}
+                    >
+                      {actionBusy === u.id
+                        ? <Loader2 size={11} className="animate-spin" />
+                        : <RotateCcw size={11} />}
+                      Reactivar
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </Card>
     </div>
@@ -623,7 +846,7 @@ function UserSearchInput({
               onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
             >
               {u.username}
-              <span className="ml-2 text-xs" style={{ color: 'var(--text-muted)' }}>{u.role.name}</span>
+              <span className="ml-2 text-xs" style={{ color: 'var(--text-muted)' }}>{u.role?.name ?? 'Sin rol'}</span>
             </button>
           ))}
         </div>
@@ -633,14 +856,54 @@ function UserSearchInput({
 }
 
 function CollectionCard({
-  col, users, roles,
-}: { col: CollectionOut; users: UserOut[]; roles: RoleInfo[] }) {
+  col, users, roles, onDeleted, flash,
+}: { col: CollectionOut; users: UserOut[]; roles: RoleInfo[]; onDeleted: () => void; flash: (msg: string, type?: 'ok' | 'err') => void }) {
   const [open, setOpen] = useState(false);
   const [rolePerms, setRolePerms] = useState<RolePermEntry[]>([]);
   const [userPerms, setUserPerms] = useState<UserPermEntry[]>([]);
   const [addUser, setAddUser] = useState<UserOut | null>(null);
   const [searchResetKey, setSearchResetKey] = useState(0);
   const [loadingPerms, setLoadingPerms] = useState(false);
+  const [deleteAction, setDeleteAction] = useState<'choose' | 'confirm-purge' | null>(null);
+  const [deleteDocCount, setDeleteDocCount] = useState(0);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  const startDelete = async () => {
+    setDeleteBusy(true);
+    try {
+      // Intento "auto": el backend hace hard delete si no hay docs, o devuelve 409 con conteo.
+      const result = await deleteCollection(col.id, 'auto');
+      if (result.deleted && !result.has_documents) {
+        flash('Colección eliminada');
+        onDeleted();
+      }
+    } catch (err) {
+      if (err instanceof CollectionHasDocumentsError) {
+        setDeleteDocCount(err.document_count);
+        setDeleteAction('choose');
+      } else {
+        flash(err instanceof Error ? err.message : 'Error', 'err');
+      }
+    }
+    setDeleteBusy(false);
+  };
+
+  const finishDelete = async (action: 'obsolete' | 'delete') => {
+    setDeleteBusy(true);
+    try {
+      await deleteCollection(col.id, action);
+      flash(
+        action === 'obsolete'
+          ? `Colección eliminada. ${deleteDocCount} documento(s) marcados como obsoletos.`
+          : `Colección y ${deleteDocCount} documento(s) eliminados permanentemente.`,
+      );
+      setDeleteAction(null);
+      onDeleted();
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'Error', 'err');
+    }
+    setDeleteBusy(false);
+  };
 
   const loadPerms = useCallback(async () => {
     setLoadingPerms(true);
@@ -686,21 +949,120 @@ function CollectionCard({
 
   return (
     <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border-subtle)' }}>
-      <button
-        onClick={() => setOpen((o) => !o)}
+      {/* Modal de decisión cuando la colección tiene documentos */}
+      <Dialog.Root open={!!deleteAction} onOpenChange={(o) => { if (!o && !deleteBusy) setDeleteAction(null); }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+          <Dialog.Content
+            className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl p-6 shadow-2xl"
+            style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}
+          >
+            <Dialog.Title
+              className="text-base font-semibold mb-2"
+              style={{ color: 'var(--gold-bright)', fontFamily: 'Playfair Display, serif' }}
+            >
+              {deleteAction === 'confirm-purge' ? 'Confirmar eliminación permanente' : 'Eliminar colección'}
+            </Dialog.Title>
+            <Dialog.Description className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>
+              La colección <strong>{col.name}</strong> tiene <strong>{deleteDocCount}</strong> documento(s).
+              {deleteAction === 'confirm-purge' ? (
+                <span> Esto borrará permanentemente los archivos, índices y vectores. <strong>No se puede deshacer.</strong></span>
+              ) : (
+                <span> Elige qué hacer con ellos:</span>
+              )}
+            </Dialog.Description>
+
+            {deleteAction === 'choose' ? (
+              <div className="space-y-2">
+                <button
+                  disabled={deleteBusy}
+                  onClick={() => finishDelete('obsolete')}
+                  className="w-full text-left px-4 py-3 rounded-lg border transition-colors disabled:opacity-50"
+                  style={{ borderColor: 'var(--border-default)', color: 'var(--text-primary)', background: 'var(--bg-surface)' }}
+                >
+                  <div className="text-sm font-medium">Marcar documentos como obsoletos</div>
+                  <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                    Los documentos quedan sin colección y en estado obsoleto. Recuperables y descargables.
+                  </div>
+                </button>
+                <button
+                  disabled={deleteBusy}
+                  onClick={() => setDeleteAction('confirm-purge')}
+                  className="w-full text-left px-4 py-3 rounded-lg border transition-colors disabled:opacity-50"
+                  style={{ borderColor: '#7f1d1d', color: '#f87171', background: 'var(--bg-surface)' }}
+                >
+                  <div className="text-sm font-medium">Eliminar todo permanentemente</div>
+                  <div className="text-xs mt-0.5" style={{ color: '#fca5a5' }}>
+                    Borra los archivos, fragmentos RAG y vectores. Irreversible.
+                  </div>
+                </button>
+              </div>
+            ) : (
+              <div className="flex justify-end gap-2 mt-2">
+                <button
+                  disabled={deleteBusy}
+                  onClick={() => setDeleteAction('choose')}
+                  className="px-4 py-2 rounded-lg text-xs font-medium disabled:opacity-50"
+                  style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-surface)' }}
+                >
+                  Atrás
+                </button>
+                <button
+                  disabled={deleteBusy}
+                  onClick={() => finishDelete('delete')}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+                  style={{ background: '#7f1d1d', color: '#fee2e2' }}
+                >
+                  {deleteBusy && <Loader2 size={12} className="animate-spin" />}
+                  Eliminar permanentemente
+                </button>
+              </div>
+            )}
+
+            <div className="flex justify-end mt-4">
+              {deleteAction === 'choose' && (
+                <Dialog.Close asChild>
+                  <button
+                    disabled={deleteBusy}
+                    className="px-4 py-2 rounded-lg text-xs font-medium disabled:opacity-50"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    Cancelar
+                  </button>
+                </Dialog.Close>
+              )}
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <div
         className="w-full flex items-center justify-between px-5 py-4 transition-colors"
         style={{ background: open ? 'var(--bg-elevated)' : 'var(--bg-surface)' }}
       >
-        <div className="flex items-center gap-3">
+        <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-3 flex-1 text-left">
           <FolderOpen size={16} style={{ color: 'var(--gold-muted)' }} />
           <span className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>{col.name}</span>
           {col.description && (
             <span className="text-xs" style={{ color: 'var(--text-muted)' }}>— {col.description}</span>
           )}
           <StatusBadge ok={col.is_active} label={col.is_active ? 'activa' : 'inactiva'} />
+        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={startDelete}
+            disabled={deleteBusy}
+            className="text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50"
+            style={{ borderColor: 'var(--status-red)', color: '#f87171' }}
+            title="Eliminar colección"
+          >
+            {deleteBusy ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
+          </button>
+          <button onClick={() => setOpen((o) => !o)} className="p-1">
+            {open ? <ChevronUp size={14} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />}
+          </button>
         </div>
-        {open ? <ChevronUp size={14} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />}
-      </button>
+      </div>
 
       {open && (
         <div className="px-5 py-4 space-y-5" style={{ background: 'var(--bg-elevated)', borderTop: '1px solid var(--border-subtle)' }}>
@@ -715,11 +1077,17 @@ function CollectionCard({
                 </p>
                 <div className="space-y-2">
                   {rolePerms
-                    .filter((rp) => !roles.find((r) => r.id === rp.role_id)?.is_system)
+                    .filter((rp) => {
+                      const r = roles.find((rr) => rr.id === rp.role_id);
+                      return r && !ROLE_NAMES_HIDDEN_IN_COLLECTIONS.has(r.name);
+                    })
                     .map((rp) => (
                       <CollectionPermRow key={rp.role_id} entry={rp} onSave={saveRolePerm} />
                     ))}
-                  {rolePerms.filter((rp) => !roles.find((r) => r.id === rp.role_id)?.is_system).length === 0 && (
+                  {rolePerms.filter((rp) => {
+                    const r = roles.find((rr) => rr.id === rp.role_id);
+                    return r && !ROLE_NAMES_HIDDEN_IN_COLLECTIONS.has(r.name);
+                  }).length === 0 && (
                     <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Sin permisos de rol configurados.</p>
                   )}
                 </div>
@@ -809,7 +1177,7 @@ function ColeccionesSection({ roles }: { roles: RoleInfo[] }) {
 
   const openModal = () => {
     const initial: DocRolePermsForm = {};
-    roles.filter((r) => !r.is_system).forEach((r) => { initial[r.id] = { can_view: false, can_download: false, can_chat: false }; });
+    selectableCollectionRoles(roles).forEach((r) => { initial[r.id] = { can_view: false, can_download: false, can_chat: false }; });
     setRolePermsForm(initial);
     setForm({ name: '', description: '' });
     setStep(1);
@@ -929,7 +1297,7 @@ function ColeccionesSection({ roles }: { roles: RoleInfo[] }) {
                   </div>
                   {/* Table rows */}
                   <div className="divide-y max-h-60 overflow-y-auto" style={{ divideColor: 'var(--border-subtle)' }}>
-                    {roles.filter((r) => !r.is_system).map((r) => {
+                    {selectableCollectionRoles(roles).map((r) => {
                       const p = rolePermsForm[r.id] ?? { can_view: false, can_download: false, can_chat: false };
                       const hasAccess = p.can_view || p.can_download || p.can_chat;
                       return (
@@ -1027,7 +1395,7 @@ function ColeccionesSection({ roles }: { roles: RoleInfo[] }) {
             <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No hay colecciones. Crea la primera con el botón de arriba.</p>
           )}
           {collections.map((col) => (
-            <CollectionCard key={col.id} col={col} users={users} roles={roles} />
+            <CollectionCard key={col.id} col={col} users={users} roles={roles} onDeleted={load} flash={flash} />
           ))}
         </div>
       </Card>
@@ -1145,34 +1513,200 @@ function DocUserPermsModal({
   );
 }
 
-function DocumentosSection({ canUpload }: { canUpload: boolean }) {
+function MoveDocModal({
+  doc, collections, onClose, onSaved, flash,
+}: {
+  doc: PgDocumentOut;
+  collections: CollectionOut[];
+  onClose: () => void;
+  onSaved: () => void;
+  flash: (msg: string, type?: 'ok' | 'err') => void;
+}) {
+  const [target, setTarget] = useState<string>(doc.collection_id ?? '__none__');
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await updatePgDocument(doc.doc_id, {
+        collection_id: target === '__none__' ? null : target,
+      });
+      flash('Documento movido');
+      onSaved();
+      onClose();
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'Error', 'err');
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Dialog.Root open onOpenChange={(o) => { if (!o && !busy) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+        <Dialog.Content
+          className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl p-6 shadow-2xl"
+          style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}
+        >
+          <Dialog.Title
+            className="text-base font-semibold mb-2"
+            style={{ color: 'var(--gold-bright)', fontFamily: 'Playfair Display, serif' }}
+          >
+            Mover a colección
+          </Dialog.Title>
+          <Dialog.Description className="text-xs mb-3 truncate" style={{ color: 'var(--text-muted)' }}>
+            {doc.original_filename}
+          </Dialog.Description>
+          <Select value={target} onChange={(e) => setTarget(e.target.value)}>
+            <option value="__none__">— Sin colección —</option>
+            {collections.filter((c) => c.is_active).map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </Select>
+          <div className="flex justify-end gap-2 mt-5">
+            <button
+              disabled={busy}
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg text-xs font-medium disabled:opacity-50"
+              style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-surface)' }}
+            >Cancelar</button>
+            <button
+              disabled={busy}
+              onClick={save}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+              style={{ background: 'var(--gold-bright)', color: '#0A1A10' }}
+            >
+              {busy && <Loader2 size={12} className="animate-spin" />}
+              Mover
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function PermanentDeleteModal({
+  doc, onClose, onConfirmed, flash,
+}: {
+  doc: PgDocumentOut;
+  onClose: () => void;
+  onConfirmed: () => void;
+  flash: (msg: string, type?: 'ok' | 'err') => void;
+}) {
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+  const expected = doc.original_filename;
+  const matches = typed.trim() === expected;
+
+  const doPurge = async () => {
+    if (!matches) return;
+    setBusy(true);
+    try {
+      await permanentDeletePgDocument(doc.doc_id);
+      flash('Documento eliminado permanentemente');
+      onConfirmed();
+      onClose();
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'Error', 'err');
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Dialog.Root open onOpenChange={(o) => { if (!o && !busy) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+        <Dialog.Content
+          className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl p-6 shadow-2xl"
+          style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle size={18} style={{ color: '#f87171' }} />
+            <Dialog.Title
+              className="text-base font-semibold"
+              style={{ color: '#f87171', fontFamily: 'Playfair Display, serif' }}
+            >
+              Eliminar permanentemente
+            </Dialog.Title>
+          </div>
+          <Dialog.Description className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
+            Esta acción borra el archivo del disco, los fragmentos RAG y los vectores. <strong>No se puede deshacer.</strong>
+          </Dialog.Description>
+          <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
+            Escriba el nombre del archivo para confirmar:
+          </p>
+          <p className="text-xs mb-2 font-mono px-2 py-1 rounded" style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }}>
+            {expected}
+          </p>
+          <Input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Nombre del archivo..." />
+          <div className="flex justify-end gap-2 mt-5">
+            <button
+              disabled={busy}
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg text-xs font-medium disabled:opacity-50"
+              style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-surface)' }}
+            >Cancelar</button>
+            <button
+              disabled={busy || !matches}
+              onClick={doPurge}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+              style={{ background: '#7f1d1d', color: '#fee2e2' }}
+            >
+              {busy && <Loader2 size={12} className="animate-spin" />}
+              Eliminar para siempre
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function DocumentosSection({ canUpload, canDelete }: { canUpload: boolean; canDelete: boolean }) {
   const [docs, setDocs] = useState<PgDocumentOut[]>([]);
   const [collections, setCollections] = useState<CollectionOut[]>([]);
   const [users, setUsers] = useState<UserOut[]>([]);
-  const [filterCol, setFilterCol] = useState('');
+
+  // Filtros
+  const [search, setSearch] = useState('');
+  const [filterCol, setFilterCol] = useState<string>(''); // '' = todas, '__none__' = sin colección, uuid = colección
+  const [filterStatus, setFilterStatus] = useState<'' | 'ACTIVE' | 'OBSOLETE'>('');
+  const [sort, setSort] = useState<PgDocumentsFilters['sort']>('newest');
+
   const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadColId, setUploadColId] = useState('');
+  const [uploadColId, setUploadColId] = useState(''); // '' = sin asignar
   const [uploading, setUploading] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; type: 'ok' | 'err' } | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<PgDocumentOut | null>(null);
+  const [confirmObsolete, setConfirmObsolete] = useState<PgDocumentOut | null>(null);
+  const [moveDoc, setMoveDoc] = useState<PgDocumentOut | null>(null);
+  const [purgeDoc, setPurgeDoc] = useState<PgDocumentOut | null>(null);
+  const [reactivatingId, setReactivatingId] = useState<string | null>(null);
   const [docPermsDoc, setDocPermsDoc] = useState<PgDocumentOut | null>(null);
   const [docPerms, setDocPerms] = useState<DocUserPermEntry[]>([]);
   const [docPermsLoading, setDocPermsLoading] = useState(false);
 
-  const flash = (text: string, type: 'ok' | 'err' = 'ok') => {
+  const flash = useCallback((text: string, type: 'ok' | 'err' = 'ok') => {
     setMsg({ text, type });
     setTimeout(() => setMsg(null), 3000);
-  };
+  }, []);
 
   const load = useCallback(async () => {
     try {
-      const [d, c, u] = await Promise.all([getPgDocuments(), getCollections(), getUsers()]);
+      const filters: PgDocumentsFilters = {};
+      if (search.trim()) filters.search = search.trim();
+      if (filterCol === '__none__') filters.uncategorized = true;
+      else if (filterCol) filters.collection_id = filterCol;
+      if (filterStatus) filters.status = filterStatus;
+      if (sort) filters.sort = sort;
+
+      const [d, c, u] = await Promise.all([getPgDocuments(filters), getCollections(), getUsers()]);
       setDocs(d);
       setCollections(c);
       setUsers(u.items);
     } catch {}
-  }, []);
+  }, [search, filterCol, filterStatus, sort]);
 
   const loadDocPerms = useCallback(async (docId: string) => {
     setDocPermsLoading(true);
@@ -1183,7 +1717,11 @@ function DocumentosSection({ canUpload }: { canUpload: boolean }) {
     setDocPermsLoading(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // Debounce: recarga 250ms después del último cambio en filtros.
+  useEffect(() => {
+    const t = setTimeout(load, 250);
+    return () => clearTimeout(t);
+  }, [load]);
 
   // Auto-refresh while any doc is pending/processing
   useEffect(() => {
@@ -1195,14 +1733,14 @@ function DocumentosSection({ canUpload }: { canUpload: boolean }) {
 
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!uploadFile || !uploadColId) return;
+    if (!uploadFile) return;
     setUploading(true);
     try {
-      await uploadToCollection(uploadColId, uploadFile);
+      await uploadPgDocument(uploadFile, uploadColId || null);
       setUploadFile(null);
       setUploadColId('');
       await load();
-      flash('Documento subido — procesando en segundo plano');
+      flash(uploadColId ? 'Documento subido — procesando en segundo plano' : 'Documento subido sin colección — asígnele una luego');
     } catch (err) { flash(err instanceof Error ? err.message : 'Error al subir', 'err'); }
     setUploading(false);
   };
@@ -1214,18 +1752,24 @@ function DocumentosSection({ canUpload }: { canUpload: boolean }) {
     setDownloading(null);
   };
 
-  const handleDelete = (doc: PgDocumentOut) => {
-    setConfirmDelete(doc);
-  };
-
-  const doDelete = async () => {
-    if (!confirmDelete) return;
+  const doObsolete = async () => {
+    if (!confirmObsolete) return;
     try {
-      await deletePgDocument(confirmDelete.doc_id);
+      await deletePgDocument(confirmObsolete.doc_id);
       await load();
       flash('Documento marcado como obsoleto');
     } catch (err) { flash(err instanceof Error ? err.message : 'Error', 'err'); }
-    setConfirmDelete(null);
+    setConfirmObsolete(null);
+  };
+
+  const handleReactivate = async (doc: PgDocumentOut) => {
+    setReactivatingId(doc.doc_id);
+    try {
+      await reactivatePgDocument(doc.doc_id);
+      await load();
+      flash(doc.collection_id ? 'Documento reactivado' : 'Documento reactivado en "Sin colección" — asígnele una colección');
+    } catch (err) { flash(err instanceof Error ? err.message : 'Error', 'err'); }
+    setReactivatingId(null);
   };
 
   const openDocPerms = (doc: PgDocumentOut) => {
@@ -1250,7 +1794,7 @@ function DocumentosSection({ canUpload }: { canUpload: boolean }) {
     } catch (err) { flash(err instanceof Error ? err.message : 'Error', 'err'); }
   };
 
-  const visible = filterCol ? docs.filter((d) => d.collection_id === filterCol) : docs;
+  const visible = docs;
 
   return (
     <div className="space-y-6">
@@ -1266,14 +1810,31 @@ function DocumentosSection({ canUpload }: { canUpload: boolean }) {
           onClose={() => setDocPermsDoc(null)}
         />
       )}
+      {moveDoc && (
+        <MoveDocModal
+          doc={moveDoc}
+          collections={collections}
+          onClose={() => setMoveDoc(null)}
+          onSaved={load}
+          flash={flash}
+        />
+      )}
+      {purgeDoc && (
+        <PermanentDeleteModal
+          doc={purgeDoc}
+          onClose={() => setPurgeDoc(null)}
+          onConfirmed={load}
+          flash={flash}
+        />
+      )}
       <ConfirmModal
-        open={!!confirmDelete}
-        onOpenChange={(o) => { if (!o) setConfirmDelete(null); }}
+        open={!!confirmObsolete}
+        onOpenChange={(o) => { if (!o) setConfirmObsolete(null); }}
         title="Marcar como obsoleto"
-        description={`¿Marcar "${confirmDelete?.title || confirmDelete?.original_filename}" como obsoleto? El documento dejará de aparecer en búsquedas y consultas.`}
+        description={`¿Marcar "${confirmObsolete?.title || confirmObsolete?.original_filename}" como obsoleto? El documento dejará de aparecer en búsquedas y consultas pero seguirá siendo descargable.`}
         confirmLabel="Marcar obsoleto"
         destructive
-        onConfirm={doDelete}
+        onConfirm={doObsolete}
       />
 
       {canUpload && (
@@ -1281,10 +1842,10 @@ function DocumentosSection({ canUpload }: { canUpload: boolean }) {
           <SectionTitle>Subir Documento</SectionTitle>
           <form onSubmit={handleUpload} className="grid grid-cols-1 gap-3 max-w-md">
             <Select
-              required value={uploadColId}
+              value={uploadColId}
               onChange={(e) => setUploadColId(e.target.value)}
             >
-              <option value="">Seleccionar colección</option>
+              <option value="">Sin asignar — decidir luego</option>
               {collections.filter((c) => c.is_active).map((c) => (
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
@@ -1304,7 +1865,7 @@ function DocumentosSection({ canUpload }: { canUpload: boolean }) {
                 accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp"
               />
             </div>
-            <BtnPrimary type="submit" disabled={uploading || !uploadFile || !uploadColId}>
+            <BtnPrimary type="submit" disabled={uploading || !uploadFile}>
               <Upload size={14} /> {uploading ? 'Subiendo...' : 'Subir Documento'}
             </BtnPrimary>
           </form>
@@ -1314,17 +1875,48 @@ function DocumentosSection({ canUpload }: { canUpload: boolean }) {
       <Card>
         <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
           <SectionTitle>Documentos</SectionTitle>
-          <div className="flex items-center gap-2">
-            <Select
-              value={filterCol}
-              onChange={(e) => setFilterCol(e.target.value)}
-              className="text-xs w-44"
-            >
-              <option value="">Todas las colecciones</option>
-              {collections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </Select>
-            <BtnGhost onClick={load}><RefreshCw size={12} /> Actualizar</BtnGhost>
+          <BtnGhost onClick={load}><RefreshCw size={12} /> Actualizar</BtnGhost>
+        </div>
+
+        {/* Toolbar de filtros */}
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} />
+            <Input
+              type="text"
+              placeholder="Buscar por nombre..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ paddingLeft: 30 }}
+            />
           </div>
+          <Select
+            value={filterCol}
+            onChange={(e) => setFilterCol(e.target.value)}
+            className="text-xs w-48"
+          >
+            <option value="">Todas las colecciones</option>
+            <option value="__none__">⚠ Sin colección</option>
+            {collections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </Select>
+          <Select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value as '' | 'ACTIVE' | 'OBSOLETE')}
+            className="text-xs w-36"
+          >
+            <option value="">Todos los estados</option>
+            <option value="ACTIVE">Activos</option>
+            <option value="OBSOLETE">Obsoletos</option>
+          </Select>
+          <Select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as PgDocumentsFilters['sort'])}
+            className="text-xs w-48"
+          >
+            <option value="newest">Más recientes primero</option>
+            <option value="oldest_obsolete">Obsoletos más antiguos</option>
+            <option value="name">Nombre A-Z</option>
+          </Select>
         </div>
 
         {visible.length === 0 ? (
@@ -1345,12 +1937,13 @@ function DocumentosSection({ canUpload }: { canUpload: boolean }) {
                 {visible.map((doc) => {
                   const rag = RAG_LABEL[doc.rag_status] ?? RAG_LABEL['sin_rag'];
                   const isObsolete = doc.pg_status === 'OBSOLETE';
+                  const noCol = !doc.collection_id;
                   return (
                     <tr
                       key={doc.doc_id}
                       style={{
                         borderBottom: '1px solid var(--border-subtle)',
-                        opacity: isObsolete ? 0.5 : 1,
+                        opacity: isObsolete ? 0.65 : 1,
                       }}
                     >
                       <td className="py-3 px-3 max-w-xs">
@@ -1360,16 +1953,26 @@ function DocumentosSection({ canUpload }: { canUpload: boolean }) {
                             {doc.original_filename}
                           </span>
                           {isObsolete && (
-                            <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'rgba(100,100,100,0.2)', color: '#6b7280' }}>
+                            <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'rgba(100,100,100,0.2)', color: '#9ca3af' }}>
                               obsoleto
                             </span>
                           )}
                         </div>
                       </td>
                       <td className="py-3 px-3 whitespace-nowrap">
-                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--gold-subtle)', color: 'var(--gold-bright)' }}>
-                          {doc.collection_name}
-                        </span>
+                        {noCol ? (
+                          <span
+                            className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border"
+                            style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', borderColor: 'rgba(245, 158, 11, 0.4)' }}
+                            title="Este documento no tiene colección asignada"
+                          >
+                            <AlertTriangle size={10} /> Sin colección
+                          </span>
+                        ) : (
+                          <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--gold-subtle)', color: 'var(--gold-bright)' }}>
+                            {doc.collection_name}
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 px-3 whitespace-nowrap">
                         <span
@@ -1402,6 +2005,16 @@ function DocumentosSection({ canUpload }: { canUpload: boolean }) {
                               : <Download size={11} />}
                             Descargar
                           </button>
+                          {canUpload && (
+                            <button
+                              onClick={() => setMoveDoc(doc)}
+                              className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors"
+                              style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
+                              title="Mover a otra colección"
+                            >
+                              <ArrowRightLeft size={11} /> Mover
+                            </button>
+                          )}
                           <button
                             onClick={() => openDocPerms(doc)}
                             className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors"
@@ -1410,14 +2023,38 @@ function DocumentosSection({ canUpload }: { canUpload: boolean }) {
                           >
                             <UserPlus size={11} /> Usuarios
                           </button>
-                          {!isObsolete && (
+                          {!isObsolete && canDelete && (
                             <button
-                              onClick={() => handleDelete(doc)}
+                              onClick={() => setConfirmObsolete(doc)}
                               className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors"
                               style={{ borderColor: 'var(--status-red)', color: '#f87171' }}
                               title="Marcar como obsoleto"
                             >
                               <Trash2 size={11} /> Obsoleto
+                            </button>
+                          )}
+                          {isObsolete && canUpload && (
+                            <button
+                              onClick={() => handleReactivate(doc)}
+                              disabled={reactivatingId === doc.doc_id}
+                              className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50"
+                              style={{ borderColor: '#2D7A4F', color: '#4ade80' }}
+                              title="Reactivar documento"
+                            >
+                              {reactivatingId === doc.doc_id
+                                ? <Loader2 size={11} className="animate-spin" />
+                                : <RotateCcw size={11} />}
+                              Reactivar
+                            </button>
+                          )}
+                          {isObsolete && canDelete && (
+                            <button
+                              onClick={() => setPurgeDoc(doc)}
+                              className="flex items-center gap-1 text-xs px-2 py-1 rounded text-white transition-colors"
+                              style={{ background: '#7f1d1d' }}
+                              title="Eliminar permanentemente"
+                            >
+                              <AlertTriangle size={11} /> Eliminar para siempre
                             </button>
                           )}
                         </div>
@@ -1444,6 +2081,7 @@ export default function AdminPage() {
     canManageUsers,
     canManageCollections,
     canUploadDocuments,
+    canDeleteDocuments,
   } = useAuth();
 
   const [activeSection, setActiveSection] = useState('');
@@ -1514,7 +2152,7 @@ export default function AdminPage() {
             <ColeccionesSection roles={roles} />
           )}
           {activeSection === 'documentos' && canUploadDocs && (
-            <DocumentosSection canUpload={canUploadDocs} />
+            <DocumentosSection canUpload={canUploadDocs} canDelete={canDeleteDocuments || canManageCollections} />
           )}
         </main>
       </div>
