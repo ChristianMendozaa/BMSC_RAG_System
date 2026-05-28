@@ -2,17 +2,20 @@ import asyncio
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
+from app.db.models.chat_message import ChatMessage
+from app.db.models.chat_session import ChatSession
 from app.db.models.collection_permission import CollectionPermission
 from app.db.models.document import PGDocument
 from app.db.models.document_version import DocumentVersion
-from app.db.models.rag_conversation import RagConversation as Conversation
+from app.db.models.rag_document import RagDocument
 from app.db.models.role_document_permission import RoleDocumentPermission
 from app.db.models.user import PGUser
 from app.db.models.user_collection_permission import UserCollectionPermission
@@ -22,74 +25,104 @@ from app.dependencies import get_current_user
 from app.schemas import ChatRequest
 from app.cache import response_cache
 from app.services import rag
+from app.services.chat_access import check_collection_access, check_doc_access
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
-# ── Permission resolution helpers ─────────────────────────────────────────────
+# ── Permission resolution (first-message expansion) ───────────────────────────
 
 async def _resolve_allowed_docs(
     user: PGUser,
     request: ChatRequest,
     db: AsyncSession,
-) -> list[str] | None:
+) -> list[str]:
     """
-    Devuelve la lista de doc_id strings que el usuario puede consultar en el chat.
-    Retorna None si el usuario tiene acceso irrestricto (admins con can_manage_collections).
+    Expands the user's collection/document selection into a validated list of
+    doc_id strings for the first message of a new session.
+    Always returns a list (never None).
     """
-    if user.role.can_manage_collections:
-        return request.document_ids
+    is_admin = user.role.can_manage_collections
 
-    udp_res = await db.execute(
-        select(UserDocumentPermission).where(UserDocumentPermission.user_id == user.id)
-    )
-    udp_map: dict[uuid.UUID, bool] = {p.document_id: p.can_chat for p in udp_res.scalars()}
+    udp_map: dict[uuid.UUID, bool] = {}
+    rdp_map: dict[uuid.UUID, bool] = {}
+    ucp_map: dict[uuid.UUID, bool] = {}
+    cp_map: dict[uuid.UUID, bool] = {}
 
-    rdp_res = await db.execute(
-        select(RoleDocumentPermission).where(RoleDocumentPermission.role_id == user.role_id)
-    )
-    rdp_map: dict[uuid.UUID, bool] = {p.document_id: p.can_chat for p in rdp_res.scalars()}
+    if not is_admin:
+        udp_res = await db.execute(
+            select(UserDocumentPermission).where(UserDocumentPermission.user_id == user.id)
+        )
+        udp_map = {p.document_id: p.can_chat for p in udp_res.scalars()}
 
-    ucp_res = await db.execute(
-        select(UserCollectionPermission).where(UserCollectionPermission.user_id == user.id)
-    )
-    ucp_map: dict[uuid.UUID, bool] = {p.collection_id: p.can_chat for p in ucp_res.scalars()}
+        rdp_res = await db.execute(
+            select(RoleDocumentPermission).where(RoleDocumentPermission.role_id == user.role_id)
+        )
+        rdp_map = {p.document_id: p.can_chat for p in rdp_res.scalars()}
 
-    cp_res = await db.execute(
-        select(CollectionPermission).where(CollectionPermission.role_id == user.role_id)
-    )
-    cp_map: dict[uuid.UUID, bool] = {p.collection_id: p.can_chat for p in cp_res.scalars()}
+        ucp_res = await db.execute(
+            select(UserCollectionPermission).where(UserCollectionPermission.user_id == user.id)
+        )
+        ucp_map = {p.collection_id: p.can_chat for p in ucp_res.scalars()}
 
-    def _can_chat(doc_id: uuid.UUID, col_id: uuid.UUID) -> bool:
+        cp_res = await db.execute(
+            select(CollectionPermission).where(CollectionPermission.role_id == user.role_id)
+        )
+        cp_map = {p.collection_id: p.can_chat for p in cp_res.scalars()}
+
+    def _can_chat(doc_id: uuid.UUID, col_id: uuid.UUID | None) -> bool:
+        if is_admin:
+            return True
         if doc_id in udp_map:
             return udp_map[doc_id]
         if doc_id in rdp_map:
             return rdp_map[doc_id]
-        if col_id in ucp_map:
-            return ucp_map[col_id]
-        if col_id in cp_map:
-            return cp_map[col_id]
+        if col_id is not None:
+            if col_id in ucp_map:
+                return ucp_map[col_id]
+            if col_id in cp_map:
+                return cp_map[col_id]
         return False
 
     if request.document_ids:
         doc_uuids = [uuid.UUID(d) for d in request.document_ids]
         docs_res = await db.execute(
-            select(PGDocument).where(PGDocument.id.in_(doc_uuids), PGDocument.status == "ACTIVE")
+            select(PGDocument, RagDocument)
+            .join(
+                RagDocument,
+                and_(
+                    RagDocument.id == PGDocument.id,
+                    RagDocument.status == "ready",
+                ),
+            )
+            .where(
+                PGDocument.id.in_(doc_uuids),
+                PGDocument.status == "ACTIVE",
+            )
         )
-        docs = docs_res.scalars().all()
-        return [str(d.id) for d in docs if _can_chat(d.id, d.collection_id)]
+        return [str(doc.id) for doc, _ in docs_res.all() if _can_chat(doc.id, doc.collection_id)]
 
     if request.collection_id:
         col_uuid = uuid.UUID(request.collection_id)
+
+        if is_admin:
+            docs_res = await db.execute(
+                select(PGDocument).where(
+                    PGDocument.collection_id == col_uuid,
+                    PGDocument.status == "ACTIVE",
+                )
+            )
+            return [str(d.id) for d in docs_res.scalars()]
+
         docs_res = await db.execute(
             select(PGDocument, DocumentVersion)
             .join(
                 DocumentVersion,
                 and_(
                     DocumentVersion.document_id == PGDocument.id,
-                    DocumentVersion.is_current == True,
+                    DocumentVersion.is_current == True,  # noqa: E712
                     DocumentVersion.index_status == "READY",
                 ),
             )
@@ -104,31 +137,37 @@ async def _resolve_allowed_docs(
     return []
 
 
-# ── Conversation persistence ───────────────────────────────────────────────────
+# ── Session persistence helpers ────────────────────────────────────────────────
 
-async def _get_history(conversation_id: str) -> list[dict]:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Conversation)
-            .where(Conversation.conversation_id == conversation_id)
-            .order_by(Conversation.created_at.asc())
+async def _get_history(session_id: str) -> list[dict]:
+    async with AsyncSessionLocal() as db_session:
+        result = await db_session.execute(
+            select(ChatMessage)
+            .where(ChatMessage.session_id == uuid.UUID(session_id))
+            .order_by(ChatMessage.created_at.asc())
         )
         rows = result.scalars().all()
         return [{"role": r.role, "content": r.content} for r in rows]
 
 
 async def _save_turn(
-    conversation_id: str, role: str, content: str, sources_json: str | None = None
+    session_id: str, role: str, content: str, sources_json: str | None = None
 ) -> None:
-    async with AsyncSessionLocal() as session:
-        turn = Conversation(
-            conversation_id=conversation_id,
+    now = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as db_session:
+        msg = ChatMessage(
+            session_id=uuid.UUID(session_id),
             role=role,
             content=content,
             sources_json=sources_json,
         )
-        session.add(turn)
-        await session.commit()
+        db_session.add(msg)
+        await db_session.execute(
+            update(ChatSession)
+            .where(ChatSession.id == uuid.UUID(session_id))
+            .values(updated_at=now)
+        )
+        await db_session.commit()
 
 
 # ── Chat endpoint ──────────────────────────────────────────────────────────────
@@ -139,32 +178,90 @@ async def chat(
     current_user: PGUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_pg_db),
 ):
-    allowed_doc_ids = await _resolve_allowed_docs(current_user, request, db)
+    session_id: str
 
-    if allowed_doc_ids is not None and len(allowed_doc_ids) == 0:
-        raise HTTPException(
-            status_code=403,
-            detail="No tienes acceso a ningún documento en el scope seleccionado",
+    if request.session_id is not None:
+        # --- Existing session: validate ownership and re-check all docs ---
+        try:
+            sid = uuid.UUID(request.session_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="session_id inválido")
+
+        sess_res = await db.execute(
+            select(ChatSession).where(
+                ChatSession.id == sid,
+                ChatSession.user_id == current_user.id,
+            )
         )
+        session = sess_res.scalar_one_or_none()
+        if session is None:
+            raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
-    conversation_id = request.conversation_id or str(uuid.uuid4())
+        doc_uuids = [uuid.UUID(str(d)) for d in (session.document_ids or [])]
+        if doc_uuids:
+            access_map = await check_doc_access(db, current_user, doc_uuids, require_ready=True)
+            blockers = [
+                {"doc_id": str(k), "reason": v}
+                for k, v in access_map.items()
+                if v is not None
+            ]
+            if blockers:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "session_invalid", "blockers": blockers},
+                )
+
+        if session.collection_id is not None:
+            col_blocker = await check_collection_access(db, session.collection_id)
+            if col_blocker:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "session_invalid", "blockers": [{"reason": col_blocker}]},
+                )
+
+        allowed_doc_ids: list[str] | None = (
+            [str(d) for d in session.document_ids] if session.document_ids else None
+        )
+        session_id = str(session.id)
+
+    else:
+        # --- New session: resolve scope and create session row ---
+        allowed_doc_ids = await _resolve_allowed_docs(current_user, request, db)
+
+        if len(allowed_doc_ids) == 0:
+            raise HTTPException(
+                status_code=403,
+                detail="No tienes acceso a ningún documento en el scope seleccionado",
+            )
+
+        title = request.message[:60] + ("…" if len(request.message) > 60 else "")
+        session = ChatSession(
+            user_id=current_user.id,
+            title=title,
+            collection_id=uuid.UUID(request.collection_id) if request.collection_id else None,
+            document_ids=[uuid.UUID(d) for d in allowed_doc_ids],
+        )
+        db.add(session)
+        await db.commit()
+        await db.refresh(session)
+        session_id = str(session.id)
 
     async def event_generator() -> AsyncGenerator[dict, None]:
         try:
-            history = await _get_history(conversation_id)
-            await _save_turn(conversation_id, "user", request.message)
+            history = await _get_history(session_id)
+            await _save_turn(session_id, "user", request.message)
 
             cached = await asyncio.to_thread(response_cache.get, request.message)
             if cached is not None:
                 cached_text, cached_sources = cached
                 await _save_turn(
-                    conversation_id, "assistant", cached_text, json.dumps(cached_sources)
+                    session_id, "assistant", cached_text, json.dumps(cached_sources)
                 )
                 yield {"data": json.dumps({"type": "token", "content": cached_text})}
                 yield {
                     "data": json.dumps({
                         "type": "done",
-                        "conversation_id": conversation_id,
+                        "session_id": session_id,
                         "sources": cached_sources,
                         "from_cache": True,
                     })
@@ -196,7 +293,7 @@ async def chat(
                 [s.model_dump() for s in final_sources] if final_sources else []
             )
             await _save_turn(
-                conversation_id,
+                session_id,
                 "assistant",
                 full_response,
                 json.dumps(sources_data),
@@ -210,7 +307,7 @@ async def chat(
             yield {
                 "data": json.dumps({
                     "type": "done",
-                    "conversation_id": conversation_id,
+                    "session_id": session_id,
                     "sources": sources_data,
                     "from_cache": False,
                 })
@@ -221,28 +318,3 @@ async def chat(
             yield {"data": json.dumps({"type": "error", "message": str(exc)})}
 
     return EventSourceResponse(event_generator())
-
-
-@router.get("/chat/history/{conversation_id}")
-async def get_conversation_history(
-    conversation_id: str,
-    _: PGUser = Depends(get_current_user),
-) -> list[dict]:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Conversation)
-            .where(Conversation.conversation_id == conversation_id)
-            .order_by(Conversation.created_at.asc())
-        )
-        rows = result.scalars().all()
-
-    turns = []
-    for r in rows:
-        sources: list = []
-        if r.sources_json:
-            try:
-                sources = json.loads(r.sources_json)
-            except Exception:
-                sources = []
-        turns.append({"role": r.role, "content": r.content, "sources": sources})
-    return turns

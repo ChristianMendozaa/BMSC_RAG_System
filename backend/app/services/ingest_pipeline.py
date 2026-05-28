@@ -7,12 +7,15 @@ import time
 import uuid as _uuid_mod
 from collections import defaultdict
 
+from sqlalchemy import and_, select
+
 from app.config import settings
 from app.db.session import PGAsyncSessionLocal as AsyncSessionLocal
 from app.db.models.rag_document import RagDocument as Document
 from app.db.models.rag_chunk import RagChunk as ChunkModel
 from app.db.models.rag_document_image import RagDocumentImage as DocumentImage
 from app.db.models.rag_document_figure import RagDocumentFigure as DocumentFigure
+from app.db.models.document_version import DocumentVersion
 
 _FIG_CAPTION = re.compile(
     r'\b(Figura|Fig\.?|Diagrama|Tabla|Imagen|Esquema)\s+(\d+)[.:\s]',
@@ -61,6 +64,15 @@ TEXT_EXTENSIONS = {".txt", ".md"}
 _IMAGE_IO_SEM = asyncio.Semaphore(4)
 
 
+_RAG_TO_INDEX_STATUS: dict[str, str] = {
+    "pending": "PENDING",
+    "processing": "INDEXING",
+    "indexing_images": "INDEXING",
+    "ready": "READY",
+    "error": "ERROR",
+}
+
+
 async def _update_doc_status(
     doc_id: str, status: str, error_message: str | None = None, **kwargs
 ) -> None:
@@ -72,7 +84,23 @@ async def _update_doc_status(
                 doc.error_message = error_message
             for k, v in kwargs.items():
                 setattr(doc, k, v)
-            await session.commit()
+
+        # Keep DocumentVersion.index_status in sync (skip if no version — legacy ingest path)
+        index_status = _RAG_TO_INDEX_STATUS.get(status)
+        if index_status:
+            ver_res = await session.execute(
+                select(DocumentVersion).where(
+                    and_(
+                        DocumentVersion.document_id == _uuid_mod.UUID(doc_id),
+                        DocumentVersion.is_current == True,  # noqa: E712
+                    )
+                )
+            )
+            ver = ver_res.scalar_one_or_none()
+            if ver is not None:
+                ver.index_status = index_status
+
+        await session.commit()
 
 
 async def _upload_and_store_image(

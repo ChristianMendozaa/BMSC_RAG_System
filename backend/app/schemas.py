@@ -97,9 +97,89 @@ class Source(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
-    conversation_id: str | None = None
+    session_id: str | None = None
     collection_id: str | None = None
     document_ids: list[str] | None = None
+
+
+class BlockerItem(BaseModel):
+    doc_id: str | None = None
+    doc_title_snapshot: str
+    reason: str
+
+
+class ResumeCheckOut(BaseModel):
+    can_resume: bool
+    blockers: list[BlockerItem]
+    collection_id: str | None
+    document_ids: list[str]
+
+
+class ChatMessageOut(BaseModel):
+    id: str
+    role: str
+    content: str
+    sources: list
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def coerce_uuid(cls, v):
+        return str(v)
+
+
+class ChatSessionListItem(BaseModel):
+    id: str
+    title: str
+    collection_id: str | None
+    document_ids: list[str]
+    updated_at: datetime
+    document_count: int
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def coerce_id(cls, v):
+        return str(v)
+
+    @field_validator("collection_id", mode="before")
+    @classmethod
+    def coerce_col_id(cls, v):
+        return str(v) if v is not None else None
+
+    @field_validator("document_ids", mode="before")
+    @classmethod
+    def coerce_doc_ids(cls, v):
+        return [str(d) for d in (v or [])]
+
+
+class ChatSessionDetail(BaseModel):
+    id: str
+    title: str
+    collection_id: str | None
+    document_ids: list[str]
+    created_at: datetime
+    updated_at: datetime
+    messages: list[ChatMessageOut]
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def coerce_id(cls, v):
+        return str(v)
+
+    @field_validator("collection_id", mode="before")
+    @classmethod
+    def coerce_col_id(cls, v):
+        return str(v) if v is not None else None
+
+    @field_validator("document_ids", mode="before")
+    @classmethod
+    def coerce_doc_ids(cls, v):
+        return [str(d) for d in (v or [])]
 
 
 class HealthService(BaseModel):

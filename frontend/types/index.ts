@@ -71,9 +71,48 @@ export interface Message {
 
 export interface ChatRequest {
   message: string;
-  conversation_id: string | null;
+  session_id: string | null;
   collection_id: string | null;
   document_ids: string[] | null;
+}
+
+export interface ChatSessionListItem {
+  id: string;
+  title: string;
+  collection_id: string | null;
+  document_ids: string[];
+  updated_at: string;
+  document_count: number;
+}
+
+export interface ChatMessageOut {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  sources: Source[];
+}
+
+export interface ChatSessionDetail {
+  id: string;
+  title: string;
+  collection_id: string | null;
+  document_ids: string[];
+  created_at: string;
+  updated_at: string;
+  messages: ChatMessageOut[];
+}
+
+export interface BlockerItem {
+  doc_id: string | null;
+  doc_title_snapshot: string;
+  reason: string;
+}
+
+export interface ResumeCheckOut {
+  can_resume: boolean;
+  blockers: BlockerItem[];
+  collection_id: string | null;
+  document_ids: string[];
 }
 
 export interface IngestResponse {

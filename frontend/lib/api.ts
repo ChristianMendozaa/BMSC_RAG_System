@@ -1,11 +1,17 @@
 import type {
+  BlockerItem,
   ChatRequest,
+  ChatSessionDetail,
+  ChatSessionListItem,
   DocumentDetail,
   DocumentsListResponse,
   IngestResponse,
   Message,
+  ResumeCheckOut,
   Source,
 } from '@/types';
+
+export type { BlockerItem, ChatSessionDetail, ChatSessionListItem, ResumeCheckOut };
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
@@ -668,17 +674,42 @@ export function getDocumentDownloadUrl(docId: string, forceDownload = false): st
   return `${API_URL}/api/documents/${docId}/download${forceDownload ? '?dl=1' : ''}`;
 }
 
-export async function getConversationHistory(conversationId: string): Promise<Message[]> {
-  const res = await fetch(`${API_URL}/api/chat/history/${conversationId}`, {
+// ── Chat sessions (history) ────────────────────────────────────────────────
+
+export async function listChatSessions(): Promise<ChatSessionListItem[]> {
+  const res = await fetch(`${API_URL}/api/conversations`, { headers: getAuthHeaders() });
+  return handleResponse<ChatSessionListItem[]>(res);
+}
+
+export async function getChatSession(id: string): Promise<ChatSessionDetail> {
+  const res = await fetch(`${API_URL}/api/conversations/${id}`, { headers: getAuthHeaders() });
+  return handleResponse<ChatSessionDetail>(res);
+}
+
+export async function resumeCheckSession(id: string): Promise<ResumeCheckOut> {
+  const res = await fetch(`${API_URL}/api/conversations/${id}/resume-check`, {
+    method: 'POST',
     headers: getAuthHeaders(),
   });
-  if (!res.ok) throw new Error(`Failed to fetch history: ${res.status}`);
-  const turns = (await res.json()) as { role: string; content: string; sources: Source[] }[];
-  return turns.map((t) => ({
+  return handleResponse<ResumeCheckOut>(res);
+}
+
+export async function deleteChatSession(id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/conversations/${id}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<void>(res);
+}
+
+/** @deprecated Use getChatSession instead */
+export async function getConversationHistory(sessionId: string): Promise<Message[]> {
+  const detail = await getChatSession(sessionId);
+  return detail.messages.map((m) => ({
     id: crypto.randomUUID(),
-    role: t.role as Message['role'],
-    content: t.content,
-    sources: t.sources ?? [],
+    role: m.role as Message['role'],
+    content: m.content,
+    sources: m.sources ?? [],
   }));
 }
 
@@ -687,7 +718,7 @@ export async function getConversationHistory(conversationId: string): Promise<Me
 export async function streamChat(
   request: ChatRequest,
   onToken: (token: string) => void,
-  onDone: (conversationId: string, sources: Source[]) => void,
+  onDone: (sessionId: string, sources: Source[]) => void,
   onError: (err: Error) => void,
 ): Promise<void> {
   let response: Response;
@@ -736,7 +767,7 @@ export async function streamChat(
           const payload = JSON.parse(raw) as {
             type: string;
             content?: string;
-            conversation_id?: string;
+            session_id?: string;
             sources?: Source[];
             message?: string;
           };
@@ -744,7 +775,7 @@ export async function streamChat(
           if (payload.type === 'token' && payload.content) {
             onToken(payload.content);
           } else if (payload.type === 'done') {
-            onDone(payload.conversation_id ?? '', payload.sources ?? []);
+            onDone(payload.session_id ?? '', payload.sources ?? []);
           } else if (payload.type === 'error') {
             onError(new Error(payload.message ?? 'Unknown stream error'));
           }

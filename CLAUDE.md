@@ -73,7 +73,7 @@ Browser → Next.js 16 frontend → FastAPI 0.115 backend
 **La cola de inferencia (`inference_queue`, `asyncio.Semaphore(1)`) es compartida entre Gemma-4 y Qwen3. El reranker corre fuera de la cola.**
 
 ### Document Ingestion Pipeline (`backend/app/services/`)
-1. File uploaded → `file_storage.py` saves to `./data/storage/documents/`
+1. File uploaded (con o sin `collection_id`) → `file_storage.py` saves to `./data/storage/documents/`. Documentos sin colección quedan en estado "Sin asignar" hasta que un admin los mueva.
 2. Format parser (`services/parsers/`) extracts text blocks and embedded images
 3. Images saved to `./data/storage/images/`, captioned by **Gemma-4 Vision** (`embedder.describe_image`)
 4. Text + captions chunked by `langchain-text-splitters` (800 tokens / 150 overlap)
@@ -94,7 +94,10 @@ Browser → Next.js 16 frontend → FastAPI 0.115 backend
 > **Importante:** El LLM de chat (Qwen3-4B) es un modelo de texto puro. Solo recibe texto como contexto — las descripciones de imágenes se inyectan como bloques de texto `[Figura N: ...]` en el prompt. El modelo no procesa ni recibe píxeles en ningún momento durante el chat.
 
 ### Auth & Permissions (`backend/app/core/`, `routers/auth.py`)
-- JWT HS256 with per-request JTI blacklist check against PostgreSQL `revoked_tokens`
+- JWT HS256 with claims `sub`, `jti`, `iat`, `exp`. Token revocation works via two independent paths:
+  - **Per-token**: JTI blacklist check against PostgreSQL `revoked_tokens` on every request (explicit logout).
+  - **Per-user**: `users.tokens_valid_after TIMESTAMPTZ`. Set to `NOW()` on password reset or user reactivation. Any JWT with `iat < tokens_valid_after` is rejected with 401 — invalidates all active sessions without a per-user JTI list.
+- Login rejects users with `role_id IS NULL` (orphaned when their role was deleted) with 403 "Su cuenta no tiene rol asignado."
 - Two-tier access control: Role-level defaults + per-document/collection ACL rows
 - Resolution order: explicit user permission → role permission → collection membership → deny
 
@@ -108,6 +111,8 @@ Browser → Next.js 16 frontend → FastAPI 0.115 backend
 - **SSE not WebSockets**: unidirectional token stream from server to client — simpler connection management.
 - **All DB/file I/O is async** (`asyncpg`, `aiofiles`); CPU-bound inference dispatched via `run_in_executor`.
 - **Qwen3 thinking mode disabled**: `/no_think` prepended to the system prompt + sampling params (temp=0.7, top_p=0.8, top_k=20) configured for non-thinking mode. The empty `<think></think>` tokens Qwen3 still emits are filtered in `stream_chat` before reaching the SSE stream.
+- **FKs nullables con `ON DELETE SET NULL`**: `documents.collection_id` y `users.role_id` aceptan NULL. Un documento sin colección o un usuario sin rol son estados válidos — no errores. Borrar una colección o un rol no rompe filas dependientes; quedan huérfanas y el admin las reasigna desde el panel.
+- **Hard delete centralizado**: `services/hard_delete.py::hard_delete_document(doc_id)` purga en orden: vectores ChromaDB, archivos físicos (original + imágenes vía `file_storage`), fila `rag_documents` (CASCADE limpia chunks/images/figures) y fila `documents` (CASCADE limpia versiones/permisos). No commitea — el caller gestiona la transacción. Usado por `DELETE /api/pg-documents/{id}/permanent` y `DELETE /api/collections/{id}?action=delete`.
 
 ## Key Files
 
@@ -124,6 +129,30 @@ Browser → Next.js 16 frontend → FastAPI 0.115 backend
 | `frontend/lib/api.ts` | Typed API client (all backend calls go through here) |
 | `frontend/lib/auth-context.tsx` | React auth state and token lifecycle |
 | `backend/sql/bd.sql` | Full PostgreSQL schema |
+| `backend/app/services/hard_delete.py` | Hard delete completo de un documento: Chroma + archivos físicos + Postgres (CASCADE). Sin commit propio. |
+| `backend/app/routers/pg_documents.py` | CRUD documentos: upload con/sin colección, patch, reactivate, soft/permanent delete, GET con filtros. |
+| `backend/app/routers/collections.py` | Colecciones: `DELETE ?action=auto\|obsolete\|delete` — auto devuelve 409 si hay docs, obsolete los deja huérfanos, delete los purga. |
+| `backend/app/routers/users.py` | Gestión de usuarios: `POST /{id}/activate`, `POST /{id}/reset-password`, `PATCH /{id}/role`. |
+
+## Admin Endpoints Reference
+
+Endpoints del panel de administración agregados en el overhaul (permisos mínimos indicados entre paréntesis):
+
+| Endpoint | Comportamiento |
+|---|---|
+| `GET /api/pg-documents` | Filtros query: `search`, `collection_id`, `status`, `uncategorized=true`, `sort=newest\|oldest_obsolete\|name`. |
+| `POST /api/pg-documents/upload` | `collection_id` opcional via form-data. Vacío → documento "Sin asignar" (`collection_id=NULL`). |
+| `PATCH /api/pg-documents/{id}` | Actualiza `title` y/o `collection_id`. `clear_collection=true` la pone en NULL. (`can_upload_documents`) |
+| `POST /api/pg-documents/{id}/reactivate` | OBSOLETE → ACTIVE. Si quedó sin colección, se mantiene "Sin asignar". (`can_upload_documents`) |
+| `DELETE /api/pg-documents/{id}` | Soft delete: marca OBSOLETE. Sigue siendo descargable. (`can_delete_documents`) |
+| `DELETE /api/pg-documents/{id}/permanent` | Hard delete completo. Requiere `status=OBSOLETE`. (`can_delete_documents`) |
+| `DELETE /api/collections/{id}?action=auto` | 409 con `{has_documents, count}` si tiene documentos. Sin docs → hard delete directo. |
+| `DELETE /api/collections/{id}?action=obsolete` | Docs → OBSOLETE + `collection_id=NULL`, luego hard delete de la colección. |
+| `DELETE /api/collections/{id}?action=delete` | Hard delete completo de todos los docs y la colección. |
+| `DELETE /api/roles/{id}` | Elimina el rol aunque tenga usuarios asignados (quedan con `role_id=NULL`). Bloquea solo `is_system=true`. Respuesta: `{deleted, affected_users}`. |
+| `POST /api/users/{id}/activate` | `is_active=true` + `tokens_valid_after=NOW()`. (`can_manage_users`) |
+| `POST /api/users/{id}/reset-password` | Reset por admin (no requiere contraseña anterior). `tokens_valid_after=NOW()` → invalida todas las sesiones. (`can_manage_users`) |
+| `PATCH /api/users/{id}/role` | Asigna o quita rol. Acepta `{role_id: UUID\|null}`. (`can_manage_users`) |
 
 ## Environment Variables Reference
 

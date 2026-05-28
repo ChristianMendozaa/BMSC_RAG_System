@@ -1,19 +1,23 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { v4 as uuidv4 } from 'uuid';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   streamChat,
   getAccessibleCollections,
-  getConversationHistory,
+  getChatSession,
+  listChatSessions,
+  resumeCheckSession,
+  deleteChatSession,
   getDocumentDownloadUrl,
   API_URL,
 } from '@/lib/api';
-import type { AccessibleCollectionOut, AccessibleDocumentOut } from '@/lib/api';
+import type { AccessibleCollectionOut, BlockerItem, ChatSessionListItem } from '@/lib/api';
 import type { Message } from '@/types';
 import ChatWindow from '@/components/chat/ChatWindow';
 import MessageInput from '@/components/chat/MessageInput';
+import ChatHistoryPanel, { ResumeBlockerModal } from '@/components/chat/ChatHistoryPanel';
+import ConfirmModal from '@/components/ui/ConfirmModal';
 import {
   RotateCcw,
   SlidersHorizontal,
@@ -40,6 +44,12 @@ interface SidebarProps {
   onToggleExpand: (id: string) => void;
   onNewConversation: () => void;
   messages: Message[];
+  // history
+  sessions: ChatSessionListItem[];
+  sessionsLoading: boolean;
+  activeSessionId: string | null;
+  onResumeSession: (id: string) => void;
+  onDeleteSession: (id: string) => void;
 }
 
 function SidebarContent({
@@ -52,6 +62,11 @@ function SidebarContent({
   onToggleExpand,
   onNewConversation,
   messages,
+  sessions,
+  sessionsLoading,
+  activeSessionId,
+  onResumeSession,
+  onDeleteSession,
 }: SidebarProps) {
   const [downloadingCollId, setDownloadingCollId] = useState<string | null>(null);
 
@@ -116,8 +131,8 @@ function SidebarContent({
         </div>
       )}
 
-      {/* Collection list */}
-      <div className="flex-1 overflow-y-auto py-2">
+      {/* Collection list — flex-1 so it takes available space, history sits below */}
+      <div className="flex-1 overflow-y-auto py-2 min-h-0">
         {collections.length === 0 ? (
           <div className="px-4 py-6 text-center">
             <Layers size={24} className="mx-auto mb-2 opacity-30" style={{ color: 'var(--text-muted)' }} />
@@ -133,7 +148,6 @@ function SidebarContent({
 
             return (
               <div key={col.id} className="mb-0.5">
-                {/* Collection row */}
                 <div
                   className="flex items-center gap-1 px-2 py-1.5 mx-2 rounded-lg group/col"
                   style={{
@@ -141,7 +155,6 @@ function SidebarContent({
                     border: isActive ? '1px solid var(--border-gold)' : '1px solid transparent',
                   }}
                 >
-                  {/* Expand toggle */}
                   <button
                     onClick={() => onToggleExpand(col.id)}
                     className="p-0.5 rounded transition-colors shrink-0"
@@ -149,8 +162,6 @@ function SidebarContent({
                   >
                     {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                   </button>
-
-                  {/* Collection name */}
                   <button
                     onClick={() => onSelectCollection(col.id)}
                     className="flex-1 text-left text-xs truncate transition-colors"
@@ -162,8 +173,6 @@ function SidebarContent({
                   >
                     {col.name}
                   </button>
-
-                  {/* Download all collection button */}
                   <button
                     onClick={(e) => { e.stopPropagation(); handleDownloadCollection(col); }}
                     disabled={!!downloadingCollId}
@@ -173,21 +182,13 @@ function SidebarContent({
                     onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)'; }}
                     title="Descargar toda la colección"
                   >
-                    {isDownloading
-                      ? <Loader2 size={12} className="animate-spin" />
-                      : <Download size={12} />
-                    }
+                    {isDownloading ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
                   </button>
-
-                  <span
-                    className="text-xs shrink-0 opacity-60"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
+                  <span className="text-xs shrink-0 opacity-60" style={{ color: 'var(--text-muted)' }}>
                     {col.documents.length}
                   </span>
                 </div>
 
-                {/* Documents (expandable) */}
                 {isExpanded && (
                   <div className="ml-6 mt-0.5 mb-1">
                     {col.documents.length === 0 ? (
@@ -199,16 +200,12 @@ function SidebarContent({
                         const isDocSelected = selectedDocIds.has(doc.doc_id);
                         const viewUrl = getDocumentDownloadUrl(doc.doc_id);
                         const dlUrl = getDocumentDownloadUrl(doc.doc_id, true);
-
                         return (
                           <div
                             key={doc.doc_id}
                             className="flex items-center gap-1 group/doc rounded-md transition-all"
-                            style={{
-                              background: isDocSelected ? 'var(--gold-subtle)' : 'transparent',
-                            }}
+                            style={{ background: isDocSelected ? 'var(--gold-subtle)' : 'transparent' }}
                           >
-                            {/* Select button */}
                             <button
                               onClick={() => {
                                 if (!isActive) onSelectCollection(col.id);
@@ -224,8 +221,6 @@ function SidebarContent({
                               <FileText size={11} className="shrink-0 opacity-70" />
                               <span className="truncate">{doc.original_filename}</span>
                             </button>
-
-                            {/* Ver + Descargar — visible on hover */}
                             <div className="flex items-center gap-0.5 pr-1 opacity-0 group-hover/doc:opacity-100 transition-opacity shrink-0">
                               <a
                                 href={viewUrl}
@@ -265,6 +260,15 @@ function SidebarContent({
         )}
       </div>
 
+      {/* History panel — below collections, above footer */}
+      <ChatHistoryPanel
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onResume={onResumeSession}
+        onDelete={onDeleteSession}
+        loading={sessionsLoading}
+      />
+
       {/* Footer */}
       <div className="p-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>
         {questionCount > 0 && (
@@ -275,10 +279,7 @@ function SidebarContent({
         <button
           onClick={onNewConversation}
           className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors"
-          style={{
-            border: '1px solid var(--border-gold)',
-            color: 'var(--gold-muted)',
-          }}
+          style={{ border: '1px solid var(--border-gold)', color: 'var(--gold-muted)' }}
           onMouseEnter={(e) => {
             (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--gold-bright)';
             (e.currentTarget as HTMLButtonElement).style.color = 'var(--gold-bright)';
@@ -304,54 +305,136 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
-  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
 
-  // Colecciones y selección
+  // Collections & selection
   const [collections, setCollections] = useState<AccessibleCollectionOut[]>([]);
   const [loadingCols, setLoadingCols] = useState(true);
   const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
   const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
   const [expandedCollections, setExpandedCollections] = useState<Set<string>>(new Set());
 
+  // History
+  const [sessions, setSessions] = useState<ChatSessionListItem[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+
+  // Modals
+  const [blockerModal, setBlockerModal] = useState<{ open: boolean; blockers: BlockerItem[] }>({
+    open: false,
+    blockers: [],
+  });
+  const [deleteModal, setDeleteModal] = useState<{ open: boolean; sessionId: string | null }>({
+    open: false,
+    sessionId: null,
+  });
+
   const hasScope = activeCollectionId !== null;
 
-  // Cargar colecciones accesibles
+  // Load collections
   useEffect(() => {
     getAccessibleCollections()
       .then((cols) => {
         setCollections(cols);
-        // Auto-expandir si hay solo una colección
-        if (cols.length === 1) {
-          setExpandedCollections(new Set([cols[0].id]));
-        }
+        if (cols.length === 1) setExpandedCollections(new Set([cols[0].id]));
       })
       .catch(() => {})
       .finally(() => setLoadingCols(false));
   }, []);
 
-  // Restaurar conversación guardada
-  useEffect(() => {
-    const stored = localStorage.getItem('conversationId');
-    if (!stored) return;
-    setConversationId(stored);
-    getConversationHistory(stored)
-      .then((msgs) => { if (msgs.length > 0) setMessages(msgs); })
-      .catch(() => { localStorage.removeItem('conversationId'); });
+  // Load chat history (replaces localStorage)
+  const refreshSessions = useCallback(() => {
+    listChatSessions()
+      .then(setSessions)
+      .catch(() => {})
+      .finally(() => setSessionsLoading(false));
   }, []);
+
+  useEffect(() => {
+    refreshSessions();
+  }, [refreshSessions]);
 
   const handleNewConversation = useCallback(() => {
     setMessages([]);
-    setConversationId(null);
+    setSessionId(null);
     setInputValue('');
     setActiveCollectionId(null);
     setSelectedDocIds(new Set());
-    localStorage.removeItem('conversationId');
   }, []);
+
+  // Resume a saved session
+  const handleResumeSession = useCallback(
+    async (id: string) => {
+      try {
+        const check = await resumeCheckSession(id);
+        if (!check.can_resume) {
+          setBlockerModal({ open: true, blockers: check.blockers });
+          return;
+        }
+
+        // Load session detail
+        const detail = await getChatSession(id);
+
+        // Hydrate messages
+        const msgs: Message[] = detail.messages.map((m) => ({
+          id: crypto.randomUUID(),
+          role: m.role as Message['role'],
+          content: m.content,
+          sources: m.sources ?? [],
+        }));
+        setMessages(msgs);
+        setSessionId(id);
+
+        // Re-fetch collections to ensure fresh state, then restore selection
+        const freshCols = await getAccessibleCollections();
+        setCollections(freshCols);
+
+        // Restore active collection
+        const colId = detail.collection_id;
+        if (colId) {
+          const colExists = freshCols.some((c) => c.id === colId);
+          if (colExists) {
+            setActiveCollectionId(colId);
+            setExpandedCollections((prev) => new Set([...prev, colId]));
+          }
+        }
+
+        // Restore selected doc IDs (intersect with what's still accessible)
+        const accessibleDocIds = new Set(
+          freshCols.flatMap((c) => c.documents.map((d) => d.doc_id)),
+        );
+        const restored = new Set(
+          detail.document_ids.filter((did) => accessibleDocIds.has(did)),
+        );
+        setSelectedDocIds(restored);
+      } catch (err) {
+        console.error('Error al reanudar sesión:', err);
+      }
+    },
+    [],
+  );
+
+  // Delete a session
+  const handleDeleteSession = useCallback((id: string) => {
+    setDeleteModal({ open: true, sessionId: id });
+  }, []);
+
+  const confirmDeleteSession = useCallback(async () => {
+    if (!deleteModal.sessionId) return;
+    try {
+      await deleteChatSession(deleteModal.sessionId);
+      setSessions((prev) => prev.filter((s) => s.id !== deleteModal.sessionId));
+      if (sessionId === deleteModal.sessionId) {
+        handleNewConversation();
+      }
+    } catch (err) {
+      console.error('Error al eliminar sesión:', err);
+    }
+  }, [deleteModal.sessionId, sessionId, handleNewConversation]);
 
   const handleSelectCollection = useCallback((colId: string) => {
     setActiveCollectionId(colId);
-    setSelectedDocIds(new Set()); // resetear docs al cambiar de colección
+    setSelectedDocIds(new Set());
     setExpandedCollections((prev) => {
       const next = new Set(prev);
       next.add(colId);
@@ -362,11 +445,8 @@ export default function ChatPage() {
   const handleToggleDoc = useCallback((docId: string) => {
     setSelectedDocIds((prev) => {
       const next = new Set(prev);
-      if (next.has(docId)) {
-        next.delete(docId);
-      } else {
-        next.add(docId);
-      }
+      if (next.has(docId)) next.delete(docId);
+      else next.add(docId);
       return next;
     });
   }, []);
@@ -374,11 +454,8 @@ export default function ChatPage() {
   const handleToggleExpand = useCallback((colId: string) => {
     setExpandedCollections((prev) => {
       const next = new Set(prev);
-      if (next.has(colId)) {
-        next.delete(colId);
-      } else {
-        next.add(colId);
-      }
+      if (next.has(colId)) next.delete(colId);
+      else next.add(colId);
       return next;
     });
   }, []);
@@ -387,8 +464,8 @@ export default function ChatPage() {
     async (text: string) => {
       if (isStreaming || !hasScope) return;
 
-      const userMsg: Message = { id: uuidv4(), role: 'user', content: text, sources: [] };
-      const assistantMsgId = uuidv4();
+      const userMsg: Message = { id: crypto.randomUUID(), role: 'user', content: text, sources: [] };
+      const assistantMsgId = crypto.randomUUID();
       const assistantMsg: Message = {
         id: assistantMsgId,
         role: 'assistant',
@@ -401,16 +478,10 @@ export default function ChatPage() {
       setInputValue('');
       setIsStreaming(true);
 
-      const convId = conversationId ?? uuidv4();
-      if (!conversationId) {
-        setConversationId(convId);
-        localStorage.setItem('conversationId', convId);
-      }
-
       await streamChat(
         {
           message: text,
-          conversation_id: convId,
+          session_id: sessionId,
           collection_id: activeCollectionId,
           document_ids: selectedDocIds.size > 0 ? Array.from(selectedDocIds) : null,
         },
@@ -421,7 +492,16 @@ export default function ChatPage() {
             ),
           );
         },
-        (_convId, sources) => {
+        (newSessionId, sources) => {
+          // First message: server returned a new session_id
+          if (!sessionId && newSessionId) {
+            setSessionId(newSessionId);
+            // Refresh history list so the new session appears
+            listChatSessions().then(setSessions).catch(() => {});
+          } else {
+            // Subsequent message: refresh to update updated_at ordering
+            listChatSessions().then(setSessions).catch(() => {});
+          }
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantMsgId ? { ...m, sources, isStreaming: false } : m,
@@ -441,7 +521,7 @@ export default function ChatPage() {
         },
       );
     },
-    [isStreaming, hasScope, conversationId, activeCollectionId, selectedDocIds],
+    [isStreaming, hasScope, sessionId, activeCollectionId, selectedDocIds],
   );
 
   const sidebarProps: SidebarProps = {
@@ -454,6 +534,11 @@ export default function ChatPage() {
     onToggleExpand: handleToggleExpand,
     onNewConversation: handleNewConversation,
     messages,
+    sessions,
+    sessionsLoading,
+    activeSessionId: sessionId,
+    onResumeSession: handleResumeSession,
+    onDeleteSession: handleDeleteSession,
   };
 
   const activeCol = collections.find((c) => c.id === activeCollectionId);
@@ -553,16 +638,11 @@ export default function ChatPage() {
           </button>
         </div>
 
-        {/* Content area: fills space above input */}
+        {/* Content area */}
         <div className="absolute inset-0 flex flex-col overflow-hidden md:pt-0 pt-12">
-          {/* Empty state when no scope */}
           {!hasScope && messages.length === 0 && (
             <div className="flex-1 flex flex-col items-center justify-center px-8 text-center">
-              <Layers
-                size={40}
-                className="mb-4 opacity-20"
-                style={{ color: 'var(--gold-muted)' }}
-              />
+              <Layers size={40} className="mb-4 opacity-20" style={{ color: 'var(--gold-muted)' }} />
               <p
                 className="text-sm font-medium mb-1"
                 style={{ color: 'var(--text-secondary)', fontFamily: 'Playfair Display, serif' }}
@@ -574,11 +654,10 @@ export default function ChatPage() {
               </p>
             </div>
           )}
-
           {(hasScope || messages.length > 0) && <ChatWindow messages={messages} />}
         </div>
 
-        {/* Input area — floats at bottom, transparent */}
+        {/* Input */}
         <div className="absolute bottom-0 left-0 right-0 px-4 pb-4 pt-1">
           <div
             className="max-w-2xl mx-auto rounded-2xl px-4 py-3"
@@ -620,6 +699,25 @@ export default function ChatPage() {
           </div>
         </div>
       </div>
+
+      {/* Resume blocker modal */}
+      <ResumeBlockerModal
+        open={blockerModal.open}
+        onOpenChange={(open) => setBlockerModal((prev) => ({ ...prev, open }))}
+        blockers={blockerModal.blockers}
+        onNewConversation={handleNewConversation}
+      />
+
+      {/* Delete confirm modal */}
+      <ConfirmModal
+        open={deleteModal.open}
+        onOpenChange={(open) => setDeleteModal((prev) => ({ ...prev, open }))}
+        title="Eliminar conversación"
+        description="¿Estás seguro? Esta acción no se puede deshacer."
+        confirmLabel="Eliminar"
+        destructive
+        onConfirm={confirmDeleteSession}
+      />
     </div>
   );
 }

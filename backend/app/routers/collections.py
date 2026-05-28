@@ -10,6 +10,7 @@ from app.db.models.collection import Collection
 from app.db.models.collection_permission import CollectionPermission
 from app.db.models.document import PGDocument
 from app.db.models.document_version import DocumentVersion
+from app.db.models.rag_document import RagDocument
 from app.db.models.role_document_permission import RoleDocumentPermission
 from app.db.models.user import PGUser
 from app.db.models.user_collection_permission import UserCollectionPermission
@@ -42,7 +43,7 @@ async def get_accessible_collections(
     all_collections = cols_result.scalars().all()
 
     if current_user.role.can_manage_collections:
-        # Admins ven todas las colecciones y todos los documentos activos con versión actual
+        # Admins ven todas las colecciones y todos los documentos activos con RAG listo
         out = []
         for col in all_collections:
             docs_result = await db.execute(
@@ -52,6 +53,13 @@ async def get_accessible_collections(
                     and_(
                         DocumentVersion.document_id == PGDocument.id,
                         DocumentVersion.is_current == True,
+                    ),
+                )
+                .join(
+                    RagDocument,
+                    and_(
+                        RagDocument.id == PGDocument.id,
+                        RagDocument.status == "ready",
                     ),
                 )
                 .where(PGDocument.collection_id == col.id, PGDocument.status == "ACTIVE")
@@ -117,6 +125,13 @@ async def get_accessible_collections(
                 and_(
                     DocumentVersion.document_id == PGDocument.id,
                     DocumentVersion.is_current == True,
+                ),
+            )
+            .join(
+                RagDocument,
+                and_(
+                    RagDocument.id == PGDocument.id,
+                    RagDocument.status == "ready",
                 ),
             )
             .where(PGDocument.collection_id == col.id, PGDocument.status == "ACTIVE")

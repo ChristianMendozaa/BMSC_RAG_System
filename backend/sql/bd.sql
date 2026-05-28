@@ -250,13 +250,23 @@ CREATE TABLE document_figures (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE conversations (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    conversation_id VARCHAR(100) NOT NULL,
-    role            VARCHAR(20)  NOT NULL,
-    content         TEXT         NOT NULL,
-    sources_json    TEXT,
-    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+CREATE TABLE chat_sessions (
+    id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title           VARCHAR(200) NOT NULL,
+    collection_id   UUID         REFERENCES collections(id) ON DELETE SET NULL,
+    document_ids    UUID[]       NOT NULL DEFAULT '{}',
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE chat_messages (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id   UUID        NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    role         VARCHAR(20) NOT NULL,
+    content      TEXT        NOT NULL,
+    sources_json TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
@@ -298,8 +308,8 @@ CREATE INDEX idx_chunks_doc         ON chunks(document_id);
 CREATE INDEX idx_doc_images_doc     ON document_images(document_id);
 CREATE INDEX idx_doc_images_page    ON document_images(document_id, page_number);
 CREATE INDEX idx_doc_figures_doc    ON document_figures(document_id);
-CREATE INDEX idx_conversations_id   ON conversations(conversation_id);
-CREATE INDEX idx_conversations_ts   ON conversations(conversation_id, created_at);
+CREATE INDEX idx_chat_sessions_user ON chat_sessions(user_id, updated_at DESC);
+CREATE INDEX idx_chat_messages_session ON chat_messages(session_id, created_at);
 
 
 -- ============================================================
@@ -328,6 +338,10 @@ CREATE TRIGGER trg_documents_updated_at
 
 CREATE TRIGGER trg_rag_documents_updated_at
     BEFORE UPDATE ON rag_documents
+    FOR EACH ROW EXECUTE FUNCTION fn_update_updated_at();
+
+CREATE TRIGGER trg_chat_sessions_updated_at
+    BEFORE UPDATE ON chat_sessions
     FOR EACH ROW EXECUTE FUNCTION fn_update_updated_at();
 
 

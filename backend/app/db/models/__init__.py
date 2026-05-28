@@ -12,7 +12,8 @@ from .rag_document import RagDocument
 from .rag_chunk import RagChunk
 from .rag_document_image import RagDocumentImage
 from .rag_document_figure import RagDocumentFigure
-from .rag_conversation import RagConversation
+from .chat_session import ChatSession
+from .chat_message import ChatMessage
 
 __all__ = [
     "PGRole",
@@ -29,5 +30,6 @@ __all__ = [
     "RagChunk",
     "RagDocumentImage",
     "RagDocumentFigure",
-    "RagConversation",
+    "ChatSession",
+    "ChatMessage",
 ]

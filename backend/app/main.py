@@ -13,6 +13,7 @@ from app.routers import permissions as permissions_router
 from app.routers.permissions import doc_perm_router
 from app.routers import collections as collections_router
 from app.routers import pg_documents as pg_documents_router
+from app.routers import conversations as conversations_router
 from app.schemas import HealthResponse, HealthService
 from app.services import embedder, file_storage, vector_store
 from app.utils.model_manager import download_and_load_all
@@ -87,6 +88,7 @@ app.include_router(permissions_router.router)
 app.include_router(doc_perm_router)
 app.include_router(collections_router.router)
 app.include_router(pg_documents_router.router)
+app.include_router(conversations_router.router)
 
 
 @app.get("/api/health", response_model=HealthResponse)
