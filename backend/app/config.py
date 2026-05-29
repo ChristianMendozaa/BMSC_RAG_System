@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 10   # chunks que se piden a ChromaDB
     rerank_top_k: int = 3       # items que pasan al prompt tras reranking (texto + imagen unificados)
 
+    # Performance logging (off por defecto; se activan desde .env)
+    chat_perf_logging: bool = False
+    ingest_perf_logging: bool = False
+
     # Folder names inside storage_path
     minio_bucket_documents: str = "documents"
     minio_bucket_images: str = "images"

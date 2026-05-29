@@ -39,6 +39,12 @@ from app.services.parsers import pdf_parser, docx_parser, pptx_parser, xlsx_pars
 
 logger = logging.getLogger(__name__)
 
+
+def _perf_log(msg: str, *args) -> None:
+    if settings.ingest_perf_logging:
+        logger.info("[ingest-perf] " + msg, *args)
+
+
 _cancelled_docs: set[str] = set()
 
 
@@ -128,6 +134,7 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
 
     # ── Step 1: Upload original file ──────────────────────────────────────
     logger.info("doc_id=%s: [1/5] Subiendo archivo original...", doc_id)
+    _t = time.perf_counter()
     try:
         minio_path = f"{doc_id}/{filename}"
         await file_storage.upload_bytes(
@@ -142,11 +149,13 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
         logger.error("doc_id=%s: storage upload failed: %s", doc_id, exc)
         await _update_doc_status(doc_id, "error", str(exc))
         return
+    _perf_log("doc_id=%s: step1 upload-original: %.3fs", doc_id, time.perf_counter() - _t)
 
     await _update_doc_status(doc_id, "processing")
 
     # ── Step 2: Parse document ─────────────────────────────────────────────
     logger.info("doc_id=%s: [2/5] Parseando documento (%s)...", doc_id, ext)
+    _t = time.perf_counter()
     try:
         if ext in IMAGE_EXTENSIONS:
             parse_result = image_parser.parse(file_bytes)
@@ -178,8 +187,13 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
         "doc_id=%s: parse OK — %d bloques de texto, %d imágenes detectadas",
         doc_id, n_text, n_imgs,
     )
+    _perf_log(
+        "doc_id=%s: step2 parse(%s): %.3fs (%d bloques txt, %d imgs)",
+        doc_id, ext, time.perf_counter() - _t, n_text, n_imgs,
+    )
 
     # ── Step 2b: Index figure-caption references ───────────────────────────
+    _t = time.perf_counter()
     figure_records: list[DocumentFigure] = []
     seen_fig_keys: set[tuple[str, int]] = set()
     for block in parse_result.text_blocks:
@@ -201,11 +215,16 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
                 session.add(rec)
             await session.commit()
         logger.info("doc_id=%s: indexadas %d referencias de figuras", doc_id, len(figure_records))
+    _perf_log(
+        "doc_id=%s: step2b figure-captions: %.3fs (%d figuras)",
+        doc_id, time.perf_counter() - _t, len(figure_records),
+    )
 
     # ── Step 3: Upload images to MinIO in parallel ─────────────────────────
     image_blocks = parse_result.image_blocks[:settings.max_images_per_doc]
     total_images = len(image_blocks)
 
+    _t = time.perf_counter()
     if total_images > 0:
         logger.info("doc_id=%s: [3/5] Subiendo %d imágenes al almacenamiento...", doc_id, total_images)
         upload_results = await asyncio.gather(
@@ -215,6 +234,10 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
     else:
         upload_results = []
         logger.info("doc_id=%s: [3/5] Sin imágenes que procesar", doc_id)
+    _perf_log(
+        "doc_id=%s: step3 upload-imagenes: %.3fs (%d imgs)",
+        doc_id, time.perf_counter() - _t, total_images,
+    )
 
     # ── Step 4: Describe images with Gemma VLM (sequential — not thread-safe) ─
     if _is_cancelled(doc_id):
@@ -229,6 +252,7 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
     if total_images > 0:
         logger.info("doc_id=%s: [4/5] Describiendo imágenes con Gemma (0/%d)...", doc_id, total_images)
 
+    _t = time.perf_counter()
     for i, (result_item, img_block) in enumerate(zip(upload_results, image_blocks)):
         if _is_cancelled(doc_id):
             logger.info("doc_id=%s: pipeline cancelado durante descripción de imágenes", doc_id)
@@ -257,8 +281,16 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
             )
             image_descriptions[img_block.image_index] = ""
 
+    if total_images > 0:
+        _vlm_elapsed = time.perf_counter() - _t
+        _perf_log(
+            "doc_id=%s: step4 describe-VLM(Gemma): %.2fs total, %.2fs/img (%d imgs)",
+            doc_id, _vlm_elapsed, _vlm_elapsed / total_images, total_images,
+        )
+
     # ── Step 5: Save image records to DB → get UUIDs ──────────────────────
     doc_uuid = _uuid_mod.UUID(doc_id)
+    _t = time.perf_counter()
 
     # Collect successfully uploaded images
     valid_images: list[tuple[str, object]] = []
@@ -286,6 +318,10 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
             await session.commit()
             for rec in db_image_records:
                 await session.refresh(rec)
+    _perf_log(
+        "doc_id=%s: step5 save-img-records(pg): %.3fs (%d registros)",
+        doc_id, time.perf_counter() - _t, len(db_image_records),
+    )
 
     image_index_to_uuid: dict[int, str] = {
         rec.image_index: str(rec.id) for rec in db_image_records
@@ -293,6 +329,7 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
 
     # ── Step 6: Build merged per-page content with inline [IMG:uuid] markers ─
     logger.info("doc_id=%s: [4/5] Construyendo contenido fusionado con imágenes inline...", doc_id)
+    _t = time.perf_counter()
 
     page_text_map: dict = defaultdict(list)
     for tb in parse_result.text_blocks:
@@ -338,11 +375,20 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
             })
 
     logger.info("doc_id=%s: %d páginas fusionadas", doc_id, len(merged_blocks))
+    _perf_log(
+        "doc_id=%s: step6 merge-paginas: %.3fs (%d paginas)",
+        doc_id, time.perf_counter() - _t, len(merged_blocks),
+    )
 
     # ── Step 7: Chunk + embed + upsert (single pass) ──────────────────────
     logger.info("doc_id=%s: [5/5] Chunking + embedding del contenido fusionado...", doc_id)
+    _t = time.perf_counter()
     chunks = chunker_service.chunk_text_blocks(merged_blocks)
     logger.info("doc_id=%s: %d chunks generados", doc_id, len(chunks))
+    _perf_log(
+        "doc_id=%s: step7a chunking: %.3fs (%d chunks)",
+        doc_id, time.perf_counter() - _t, len(chunks),
+    )
 
     if not chunks:
         logger.info("doc_id=%s: sin chunks, finalizando", doc_id)
@@ -354,12 +400,17 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
         return
 
     texts = [c.content for c in chunks]
+    _t = time.perf_counter()
     try:
         vectors = await embedder.embed_texts_batch(texts)
     except Exception as exc:
         logger.error("doc_id=%s: batch embedding falló: %s", doc_id, exc)
         await _update_doc_status(doc_id, "error", f"Embedding error: {exc}")
         return
+    _perf_log(
+        "doc_id=%s: step7b embedding-batch(BGE-M3): %.3fs (%d chunks)",
+        doc_id, time.perf_counter() - _t, len(chunks),
+    )
 
     logger.info("doc_id=%s: embeddings listos, subiendo %d chunks a ChromaDB...", doc_id, len(chunks))
 
@@ -383,14 +434,20 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
             },
         })
 
+    _t = time.perf_counter()
     try:
         await vector_store.upsert_chunks_batch(doc_id, chroma_items)
     except Exception as exc:
         logger.error("doc_id=%s: ChromaDB upsert falló: %s", doc_id, exc)
         await _update_doc_status(doc_id, "error", f"ChromaDB error: {exc}")
         return
+    _perf_log(
+        "doc_id=%s: step7c chroma-upsert: %.3fs (%d chunks)",
+        doc_id, time.perf_counter() - _t, len(chroma_items),
+    )
 
     logger.info("doc_id=%s: guardando %d chunks en PostgreSQL...", doc_id, len(chunks))
+    _t = time.perf_counter()
     async with AsyncSessionLocal() as session:
         for i, chunk in enumerate(chunks):
             found_ids = _IMG_MARKER_RE.findall(chunk.content)
@@ -406,6 +463,10 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
                 }),
             ))
         await session.commit()
+    _perf_log(
+        "doc_id=%s: step7d save-chunks(pg): %.3fs (%d chunks)",
+        doc_id, time.perf_counter() - _t, len(chunks),
+    )
 
     elapsed = time.monotonic() - t_start
     _clear_cancelled(doc_id)
@@ -418,3 +479,4 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
         "doc_id=%s: ✓ Ingesta completa — %d chunks, %d imágenes en %.1fs",
         doc_id, len(chunks), len(db_image_records), elapsed,
     )
+    _perf_log("doc_id=%s: TOTAL ingesta: %.1fs", doc_id, elapsed)

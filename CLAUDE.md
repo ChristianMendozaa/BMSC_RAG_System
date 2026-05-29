@@ -175,3 +175,5 @@ Endpoints del panel de administración agregados en el overhaul (permisos mínim
 | `RETRIEVAL_TOP_K` | Chunks fetched from ChromaDB before reranking (default: 10) |
 | `RERANK_TOP_K` | Items passed to the LLM after reranking (default: 3) |
 | `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` | Seeded on first startup |
+| `CHAT_PERF_LOGGING` | Si `true`, emite logs `[chat-perf]` con tiempos por etapa del chat (embedding, search, rerank, espera en cola, prefill/TTFT, tok/s). Default `false`. |
+| `INGEST_PERF_LOGGING` | Si `true`, emite logs `[ingest-perf]` con tiempos por paso de la ingesta (parse, subida/descripción de imágenes con Gemma, embedding batch, upsert ChromaDB, escrituras Postgres). Default `false`. |

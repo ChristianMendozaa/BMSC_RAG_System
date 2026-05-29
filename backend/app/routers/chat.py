@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import AsyncGenerator
@@ -21,6 +22,7 @@ from app.db.models.user import PGUser
 from app.db.models.user_collection_permission import UserCollectionPermission
 from app.db.models.user_document_permission import UserDocumentPermission
 from app.db.session import PGAsyncSessionLocal as AsyncSessionLocal, get_pg_db
+from app.config import settings
 from app.dependencies import get_current_user
 from app.schemas import ChatRequest
 from app.cache import response_cache
@@ -28,6 +30,12 @@ from app.services import rag
 from app.services.chat_access import check_collection_access, check_doc_access
 
 logger = logging.getLogger(__name__)
+
+
+def _perf_log(msg: str, *args) -> None:
+    if settings.chat_perf_logging:
+        logger.info("[chat-perf] " + msg, *args)
+
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -248,14 +256,30 @@ async def chat(
 
     async def event_generator() -> AsyncGenerator[dict, None]:
         try:
-            history = await _get_history(session_id)
-            await _save_turn(session_id, "user", request.message)
+            t_total = time.perf_counter()
 
+            t0 = time.perf_counter()
+            history = await _get_history(session_id)
+            _perf_log("history(db): %.3fs", time.perf_counter() - t0)
+
+            t0 = time.perf_counter()
+            await _save_turn(session_id, "user", request.message)
+            _perf_log("save-user(db): %.3fs", time.perf_counter() - t0)
+
+            t0 = time.perf_counter()
             cached = await asyncio.to_thread(response_cache.get, request.message)
+            _perf_log(
+                "cache lookup: %.3fs (%s)",
+                time.perf_counter() - t0, "HIT" if cached is not None else "MISS",
+            )
             if cached is not None:
                 cached_text, cached_sources = cached
                 await _save_turn(
                     session_id, "assistant", cached_text, json.dumps(cached_sources)
+                )
+                _perf_log(
+                    "TOTAL chat (cache hit): %.3fs",
+                    time.perf_counter() - t_total,
                 )
                 yield {"data": json.dumps({"type": "token", "content": cached_text})}
                 yield {
@@ -292,17 +316,21 @@ async def chat(
             sources_data = (
                 [s.model_dump() for s in final_sources] if final_sources else []
             )
+            t0 = time.perf_counter()
             await _save_turn(
                 session_id,
                 "assistant",
                 full_response,
                 json.dumps(sources_data),
             )
+            _perf_log("save-assistant(db): %.3fs", time.perf_counter() - t0)
 
             if full_response and sources_data:
                 await asyncio.to_thread(
                     response_cache.set, request.message, full_response, sources_data
                 )
+
+            _perf_log("TOTAL chat: %.3fs", time.perf_counter() - t_total)
 
             yield {
                 "data": json.dumps({

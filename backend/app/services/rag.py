@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 import uuid
 from typing import AsyncGenerator
 
@@ -13,6 +14,12 @@ from app.utils.model_manager import get_chat_llm
 from app.utils.inference_queue import inference_queue
 
 logger = logging.getLogger(__name__)
+
+
+def _perf_log(msg: str, *args) -> None:
+    if settings.chat_perf_logging:
+        logger.info("[chat-perf] " + msg, *args)
+
 
 _SYSTEM_PROMPT_BASE = """Eres un asistente experto del banco. Tu función es ayudar a los empleados
 a consultar la documentación interna del banco de manera precisa y útil.
@@ -93,18 +100,27 @@ async def build_context(
     Devuelve (text_contexts, image_sources) — ambos rerankeados, top rerank_top_k en total.
     Las image_sources llevan el campo 'content' con la descripción de la imagen para el prompt.
     """
+    t_build_start = time.perf_counter()
+
     search_query = message
     if history:
         recent_user = [t["content"] for t in history[-4:] if t["role"] == "user"]
         if recent_user:
             search_query = " ".join(recent_user[-2:]) + " " + message
 
+    t0 = time.perf_counter()
     query_vector = await embedder.embed_text(search_query)
+    _perf_log("embedding(BGE-M3): %.3fs", time.perf_counter() - t0)
 
+    t0 = time.perf_counter()
     chroma_hits = await vector_store.search(
         query_vector=query_vector,
         top_k=settings.retrieval_top_k,
         doc_ids=document_ids,
+    )
+    _perf_log(
+        "chroma-search: %.3fs (%d hits)",
+        time.perf_counter() - t0, len(chroma_hits),
     )
 
     text_candidates: list[dict] = []
@@ -122,16 +138,35 @@ async def build_context(
         if r.get("doc_id") and r.get("page_number"):
             doc_page_pairs.add((r["doc_id"], r["page_number"]))
 
+    t0 = time.perf_counter()
     image_candidates = await _fetch_image_descriptions(doc_page_pairs)
+    _perf_log(
+        "image-desc(db): %.3fs (%d imgs)",
+        time.perf_counter() - t0, len(image_candidates),
+    )
 
     pool = text_candidates + image_candidates
     if not pool:
+        _perf_log(
+            "retrieval total: %.3fs (pool vacío)",
+            time.perf_counter() - t_build_start,
+        )
         return [], []
 
+    t0 = time.perf_counter()
     reranked = await reranker_svc.rerank(message, pool, top_k=settings.rerank_top_k)
+    _perf_log(
+        "rerank(BGE-ce): %.3fs (%d->%d)",
+        time.perf_counter() - t0, len(pool), len(reranked),
+    )
 
     text_contexts = [c for c in reranked if c["type"] == "text"]
     image_sources = [c for c in reranked if c["type"] == "image"]
+
+    _perf_log(
+        "retrieval total: %.3fs",
+        time.perf_counter() - t_build_start,
+    )
 
     return text_contexts, image_sources
 
@@ -234,8 +269,12 @@ async def stream_chat(
     loop = asyncio.get_running_loop()
     token_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
+    # Métricas de inferencia compartidas con el scope async (rellenadas en el executor)
+    llm_stats: dict[str, float] = {"start": 0.0, "first_token": 0.0, "end": 0.0, "n_tokens": 0}
+
     def _run_llm() -> None:
         llm = get_chat_llm()
+        llm_stats["start"] = time.perf_counter()
         try:
             stream = llm.create_chat_completion(
                 messages=messages,
@@ -255,6 +294,10 @@ async def stream_chat(
                 content: str = delta.get("content") or ""
                 if not content:
                     continue
+                if llm_stats["n_tokens"] == 0:
+                    llm_stats["first_token"] = time.perf_counter()
+                # Conteo real de tokens generados (incluye los <think> filtrados)
+                llm_stats["n_tokens"] += 1
                 think_buf += content
                 # Consume known think-block patterns from buffer
                 while True:
@@ -299,11 +342,14 @@ async def stream_chat(
                 token_queue.put(f"{_ERROR_PREFIX}{exc}"), loop
             ).result(timeout=5)
         finally:
+            llm_stats["end"] = time.perf_counter()
             asyncio.run_coroutine_threadsafe(
                 token_queue.put(None), loop
             ).result(timeout=5)
 
+    t_request = time.perf_counter()
     async with inference_queue.acquire():
+        _perf_log("cola-llm wait: %.3fs", time.perf_counter() - t_request)
         llm_task = loop.run_in_executor(None, _run_llm)
 
         try:
@@ -316,5 +362,18 @@ async def stream_chat(
                 yield item, None
         finally:
             await llm_task
+
+        n_tokens = int(llm_stats["n_tokens"])
+        if n_tokens > 0 and llm_stats["first_token"] > 0:
+            prefill = llm_stats["first_token"] - llm_stats["start"]
+            gen_time = llm_stats["end"] - llm_stats["first_token"]
+            tok_per_s = n_tokens / gen_time if gen_time > 0 else 0.0
+            _perf_log("prefill(TTFT Qwen3): %.3fs", prefill)
+            _perf_log(
+                "generacion(Qwen3): %d tokens en %.2fs -> %.1f tok/s",
+                n_tokens, gen_time, tok_per_s,
+            )
+        else:
+            _perf_log("generacion(Qwen3): sin tokens generados")
 
     yield "", sources
