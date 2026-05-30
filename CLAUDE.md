@@ -168,10 +168,11 @@ Endpoints del panel de administración agregados en el overhaul (permisos mínim
 | `CHAT_GGUF_REPO` / `CHAT_GGUF_FILENAME` | Llama-3.2-3B chat model |
 | `CHAT_N_CTX` | Llama-3.2-3B context window (default: 8192) |
 | `CHAT_MAX_TOKENS` | Max tokens per chat response (default: 1024) |
-| `CHAT_TEMPERATURE` / `CHAT_TOP_P` / `CHAT_TOP_K` | Chat sampling params (default: 0.7 / 0.9 / 40) |
+| `CHAT_TEMPERATURE` / `CHAT_TOP_P` / `CHAT_TOP_K` | Chat sampling params (default: 0.2 / 0.9 / 40) |
 | `RERANKER_MODEL_ID` | BGE reranker HF ID (default: `BAAI/bge-reranker-v2-m3`) |
-| `RETRIEVAL_TOP_K` | Chunks fetched from ChromaDB before reranking (default: 10) |
+| `RETRIEVAL_TOP_K` | Chunks fetched from ChromaDB before reranking (default: 12) |
 | `RERANK_TOP_K` | Items passed to the LLM after reranking (default: 3) |
+| `RERANK_MAX_IMAGES` | Cap of image descriptions added to the rerank pool (default: 6) |
 | `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` | Seeded on first startup |
 | `CHAT_PERF_LOGGING` | Si `true`, emite logs `[chat-perf]` con tiempos por etapa del chat (embedding, search, rerank, espera en cola, prefill/TTFT, tok/s). Default `false`. |
 | `INGEST_PERF_LOGGING` | Si `true`, emite logs `[ingest-perf]` con tiempos por paso de la ingesta (parse, subida/descripción de imágenes con Gemma, embedding batch, upsert ChromaDB, escrituras Postgres). Default `false`. |

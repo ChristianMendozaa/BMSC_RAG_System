@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     chat_gguf_filename: str = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
     chat_n_ctx: int = 8192
     chat_max_tokens: int = 1024
-    chat_temperature: float = 0.7
+    chat_temperature: float = 0.2   # casi determinista: máxima fidelidad al contexto
     chat_top_p: float = 0.9
     chat_top_k: int = 40
     chat_repeat_penalty: float = 1.1
@@ -51,8 +51,9 @@ class Settings(BaseSettings):
     skip_ocr: bool = False
 
     # Retrieval knobs
-    retrieval_top_k: int = 10   # chunks que se piden a ChromaDB
+    retrieval_top_k: int = 12   # candidatos que se piden a ChromaDB antes del reranking
     rerank_top_k: int = 3       # items que pasan al prompt tras reranking (texto + imagen unificados)
+    rerank_max_images: int = 6  # tope de descripciones de imagen que entran al reranker (coste CPU)
 
     # Performance logging (off por defecto; se activan desde .env)
     chat_perf_logging: bool = False

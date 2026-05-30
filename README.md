@@ -406,12 +406,13 @@ The UI is available at `http://localhost:3000`.
 | `CHAT_GGUF_FILENAME` | `Llama-3.2-3B-Instruct-Q4_K_M.gguf` | Llama-3.2-3B GGUF filename |
 | `CHAT_N_CTX` | `8192` | Llama-3.2-3B context window (tokens) |
 | `CHAT_MAX_TOKENS` | `1024` | Max tokens per chat response |
-| `CHAT_TEMPERATURE` | `0.7` | Chat sampling temperature |
+| `CHAT_TEMPERATURE` | `0.2` | Chat sampling temperature |
 | `CHAT_TOP_P` | `0.9` | Chat nucleus sampling threshold |
 | `CHAT_TOP_K` | `40` | Chat top-k sampling |
 | `RERANKER_MODEL_ID` | `BAAI/bge-reranker-v2-m3` | Cross-encoder reranker HF model ID |
-| `RETRIEVAL_TOP_K` | `10` | Chunks fetched from ChromaDB before reranking |
+| `RETRIEVAL_TOP_K` | `12` | Chunks fetched from ChromaDB before reranking |
 | `RERANK_TOP_K` | `3` | Items passed to the LLM after reranking |
+| `RERANK_MAX_IMAGES` | `6` | Cap of image descriptions added to the rerank pool |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `480` | JWT expiry (8 hours) |
 | `INITIAL_ADMIN_USERNAME` | `admin` | Seeded superadmin username |
 | `INITIAL_ADMIN_PASSWORD` | — | Seeded superadmin password |

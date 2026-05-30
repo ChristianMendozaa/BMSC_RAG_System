@@ -94,7 +94,7 @@ def _load_all_sync() -> None:
     _chat_llm = Llama(
         model_path=chat_path,
         n_ctx=settings.chat_n_ctx,
-        n_batch=512,
+        n_batch=2048,   # prefill en menos lotes -> mejor throughput de CPU (menor TTFT)
         n_threads=n_threads,
         n_threads_batch=n_threads,
         use_mmap=False,

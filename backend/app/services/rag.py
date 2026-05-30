@@ -21,18 +21,28 @@ def _perf_log(msg: str, *args) -> None:
         logger.info("[chat-perf] " + msg, *args)
 
 
-_SYSTEM_PROMPT_BASE = """Eres un asistente experto del banco. Tu función es ayudar a los empleados
-a consultar la documentación interna del banco de manera precisa y útil.
+_SYSTEM_PROMPT_BASE = """Eres un asistente experto de soporte del banco. Tu función es guiar a
+operarios y empleados resolviendo consultas sobre documentación interna, manuales operativos e
+incidencias, de forma precisa, accionable y fiable.
 
 Directrices:
-- Responde siempre en español, de manera clara y profesional.
-- Basa tus respuestas exclusivamente en el contexto proporcionado.
-- Si la información no está en el contexto, indícalo claramente.
-- Cita las fuentes cuando sea relevante (nombre del documento y página).
-- Para procedimientos, usa listas numeradas. Para información general, usa párrafos.
-- Nunca inventes información que no esté en los documentos proporcionados.
+- Responde siempre en español, de forma clara, concisa y profesional.
+- Basa tus respuestas EXCLUSIVAMENTE en el contexto proporcionado. Nunca inventes datos, pasos,
+  valores ni nombres que no estén en los documentos.
+- No describas lo que el documento "podría", "puede" o "suele" contener. Cíñete a lo que aparece
+  literalmente en el contexto; no especules ni generalices.
+- Las descripciones de figuras del contexto SON la información visual disponible, ya extraída en
+  texto. Trátalas como hechos del documento. Nunca digas que no puedes ver imágenes, que no hay
+  imágenes adjuntas, ni pidas que se adjunte ninguna imagen.
+- Si la información necesaria no está en el contexto, dilo explícitamente ("Esta información no está
+  en la documentación disponible") y, si procede, sugiere escalar o consultar al área responsable.
+- Para procedimientos e incidencias, responde con pasos numerados en el orden de ejecución; señala
+  los requisitos previos, advertencias o riesgos cuando el documento los mencione.
+- Para consultas conceptuales, usa párrafos breves.
+- Cita la fuente entre paréntesis cuando sea relevante (nombre del documento y página),
+  p. ej. (Manual de operaciones, pág. 4).
 - El contexto puede incluir fragmentos de texto y descripciones textuales de figuras, tablas o
-  diagramas extraídas de los documentos. Úsalas para responder preguntas sobre contenido visual."""
+  diagramas extraídas de los documentos. Trátalas como información válida del documento."""
 
 SYSTEM_PROMPT = _SYSTEM_PROMPT_BASE
 
@@ -138,6 +148,9 @@ async def build_context(
 
     t0 = time.perf_counter()
     image_candidates = await _fetch_image_descriptions(doc_page_pairs)
+    # Cap de imágenes que entran al reranker: cada par extra cuesta CPU en el cross-encoder
+    if len(image_candidates) > settings.rerank_max_images:
+        image_candidates = image_candidates[:settings.rerank_max_images]
     _perf_log(
         "image-desc(db): %.3fs (%d imgs)",
         time.perf_counter() - t0, len(image_candidates),
@@ -195,7 +208,8 @@ def _build_sources(
     return sources
 
 
-_MAX_TEXT_CHUNK_CHARS = 900
+_MAX_TEXT_CHUNK_CHARS = 1300
+_MAX_HISTORY_TURN_CHARS = 500
 
 
 def _truncate(text: str, max_chars: int) -> str:
@@ -225,7 +239,7 @@ def _build_messages(
         desc = (img.get("content") or "").strip()
         if not desc:
             continue
-        src = f"[Figura {item_num}: {img['filename']}"
+        src = f"[Descripción de figura {item_num} — {img['filename']}"
         if img.get("page"):
             src += f", página {img['page']}"
         src += "]"
@@ -235,9 +249,10 @@ def _build_messages(
     context_block = context_text.strip()
 
     history_text = ""
-    for turn in history[-4:]:
+    # Solo los 2 últimos turnos y truncados: evita reinyectar respuestas largas en cada prefill
+    for turn in history[-2:]:
         label = "Usuario" if turn["role"] == "user" else "Asistente"
-        history_text += f"{label}: {turn['content']}\n"
+        history_text += f"{label}: {_truncate(turn['content'], _MAX_HISTORY_TURN_CHARS)}\n"
 
     user_content = ""
     if context_block:
