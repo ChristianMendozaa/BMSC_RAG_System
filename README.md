@@ -15,7 +15,7 @@
 
 DocuMind RAG is a self-hosted document intelligence platform that ingests organizational documents and makes them queryable through natural language. The system combines dense vector retrieval, cross-encoder reranking, and a quantized language model to answer questions grounded strictly in the uploaded knowledge base — including visual content extracted from figures and diagrams as text descriptions.
 
-The stack runs entirely on-premise with no external API dependencies. The inference layer uses a **dual-model architecture**: **Gemma-4 E4B Q4\_K\_M** (multimodal, via `llama-cpp-python`) handles image captioning during document ingestion; **Qwen3-4B Q4\_K\_M** (text-only) generates all chat responses. **BGE-reranker-v2-m3** reranks the retrieval pool before it reaches the LLM. Embeddings are produced by **BGE-M3** via `sentence-transformers`, and vectors are persisted in an embedded **ChromaDB** instance. A hybrid RBAC + per-document ACL model controls which users and roles can view or chat over specific documents and collections.
+The stack runs entirely on-premise with no external API dependencies. The inference layer uses a **dual-model architecture**: **Gemma-4 E4B Q4\_K\_M** (multimodal, via `llama-cpp-python`) handles image captioning during document ingestion; **Llama-3.2-3B-Instruct Q4\_K\_M** (text-only) generates all chat responses. **BGE-reranker-v2-m3** reranks the retrieval pool before it reaches the LLM. Embeddings are produced by **BGE-M3** via `sentence-transformers`, and vectors are persisted in an embedded **ChromaDB** instance. A hybrid RBAC + per-document ACL model controls which users and roles can view or chat over specific documents and collections.
 
 ---
 
@@ -45,7 +45,7 @@ graph TD
     subgraph Inference["Local Inference — CPU only"]
         QUEUE[FIFO Inference Queue<br/>semaphore = 1]
         GEMMA[Gemma-4 E4B Q4_K_M<br/>image captioning · ingest only]
-        QWEN[Qwen3-4B Q4_K_M<br/>chat text generation]
+        QWEN[Llama-3.2-3B Q4_K_M<br/>chat text generation]
         EMBED[BGE-M3 1024-d<br/>sentence-transformers]
         RERANK[BGE-reranker-v2-m3<br/>cross-encoder · outside queue]
     end
@@ -118,7 +118,7 @@ sequenceDiagram
     participant VDB as ChromaDB
     participant RR as BGE-reranker-v2-m3
     participant Q as Inference Queue
-    participant LLM as Qwen3-4B
+    participant LLM as Llama-3.2-3B
 
     User->>FE: Send message
     FE->>API: POST /api/chat
@@ -133,7 +133,7 @@ sequenceDiagram
     API->>RR: Rerank pool (chunks + image descriptions)
     RR-->>API: Top-3 items by relevance
     API->>Q: Enqueue inference request (FIFO)
-    Q->>LLM: Prompt: /no_think + system + text context + history + query
+    Q->>LLM: Prompt: system + text context + history + query
     loop Token stream
         LLM-->>API: Token
         API-->>FE: SSE: data token
@@ -144,7 +144,7 @@ sequenceDiagram
     API->>PG: Cache response (query hash)
 ```
 
-> **Note:** The chat LLM (Qwen3-4B) is a text-only model. It receives only text as context — image descriptions are injected as `[Figura N: ...]` text blocks in the prompt. The model does not process or receive image pixels at any point during chat.
+> **Note:** The chat LLM (Llama-3.2-3B) is a text-only model. It receives only text as context — image descriptions are injected as `[Figura N: ...]` text blocks in the prompt. The model does not process or receive image pixels at any point during chat.
 
 ---
 
@@ -246,7 +246,7 @@ erDiagram
 
 | Component | Technology |
 |-----------|------------|
-| Chat LLM | Qwen3-4B Q4\_K\_M GGUF — `llama-cpp-python` 0.3.23 (text-only) |
+| Chat LLM | Llama-3.2-3B-Instruct Q4\_K\_M GGUF — `llama-cpp-python` 0.3.23 (text-only) |
 | Vision Captioning | Gemma-4 E4B Q4\_K\_M + mmproj — `llama-cpp-python` (ingest only) |
 | Reranker | BGE-reranker-v2-m3 — `transformers` + `AutoModelForSequenceClassification` |
 | Embeddings | BGE-M3 (1024-d, multilingual) — `sentence-transformers` |
@@ -265,7 +265,7 @@ erDiagram
 ## Key Design Decisions
 
 **1. Dual-model inference architecture**
-Gemma-4 E4B (multimodal) runs exclusively during document ingestion to generate text captions for extracted images. Qwen3-4B (text-only) runs exclusively during chat to generate responses. This separation means the chat LLM never receives image pixels — it receives pre-generated text descriptions — which reduces prompt size, eliminates multimodal inference overhead in the hot path, and avoids any implication that the chat model has visual capability.
+Gemma-4 E4B (multimodal) runs exclusively during document ingestion to generate text captions for extracted images. Llama-3.2-3B (text-only) runs exclusively during chat to generate responses. This separation means the chat LLM never receives image pixels — it receives pre-generated text descriptions — which reduces prompt size, eliminates multimodal inference overhead in the hot path, and avoids any implication that the chat model has visual capability.
 
 **2. BGE cross-encoder reranking (top-10 → top-3)**
 ChromaDB returns the top-10 chunks by cosine similarity. BGE-reranker-v2-m3 then re-scores the full pool (text chunks + image descriptions) against the original query using a cross-encoder, keeping only the 3 most relevant items for the prompt. This two-stage retrieval improves answer quality and reduces LLM prefill time. The reranker runs outside the inference queue since it is fast and CPU-orthogonal to the LLM.
@@ -280,15 +280,12 @@ ChromaDB runs in-process with a persistent HNSW index on disk (`./data/chroma`).
 BGE-M3 produces 1024-dimensional embeddings that perform well in symmetric retrieval mode (no `query:`/`passage:` instruction prefixes required). This simplifies the embedding pipeline and supports multilingual documents out of the box.
 
 **6. Shared FIFO Inference Queue (semaphore = 1)**
-A single `asyncio.Semaphore` serializes all LLM calls — both Gemma-4 (image captioning during ingest) and Qwen3-4B (chat generation) share the same queue. Concurrent HTTP requests queue rather than contend on CPU threads, preventing latency spikes from context switching during matrix operations.
+A single `asyncio.Semaphore` serializes all LLM calls — both Gemma-4 (image captioning during ingest) and Llama-3.2-3B (chat generation) share the same queue. Concurrent HTTP requests queue rather than contend on CPU threads, preventing latency spikes from context switching during matrix operations.
 
-**7. Qwen3 thinking mode disabled**
-`/no_think` is prepended to the system prompt and sampling is set to non-thinking parameters (temp=0.7, top_p=0.8, top_k=20). Qwen3 still emits a trivially empty `<think></think>` block; a state-machine filter in `stream_chat` strips these tokens before they reach the SSE stream, ensuring clean output with no latency cost.
-
-**8. RBAC + per-document ACL**
+**7. RBAC + per-document ACL**
 Roles define coarse-grained defaults (`can_upload_documents`, `can_manage_collections`). Individual documents and collections carry separate permission rows per user and per role with `can_view`, `can_chat`, `can_edit`, `can_share`, `can_delete` flags. The resolution order is: explicit user permission → role permission → collection membership → deny.
 
-**9. SSE over WebSockets**
+**8. SSE over WebSockets**
 Server-Sent Events deliver token-by-token streaming over a standard HTTP connection. This avoids WebSocket connection management complexity while satisfying the one-directional server→client stream requirement of LLM output.
 
 **10. Fully async I/O with thread executor offload**
@@ -326,7 +323,7 @@ This downloads five artifacts to `./models_cache/` (~11 GB total):
 | `google_gemma-4-E4B-it-Q4_K_M.gguf` | ~5.4 GB | Vision LLM — image captioning during ingest |
 | `mmproj-google_gemma-4-E4B-it-f16.gguf` | ~1.0 GB | Multimodal projection for Gemma-4 |
 | `BAAI/bge-m3/` | ~1.1 GB | Embeddings — semantic vector encoding |
-| `Qwen_Qwen3-4B-Q4_K_M.gguf` | ~2.6 GB | Chat LLM — text generation in RAG chat |
+| `Llama-3.2-3B-Instruct-Q4_K_M.gguf` | ~2.0 GB | Chat LLM — text generation in RAG chat |
 | `BAAI/bge-reranker-v2-m3/` | ~1.1 GB | Cross-encoder reranker |
 
 ### 3. Configure environment
@@ -351,7 +348,7 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 On startup the application:
-1. Loads all four models from the model cache (Gemma-4, Qwen3-4B, BGE-M3, BGE-reranker)
+1. Loads all four models from the model cache (Gemma-4, Llama-3.2-3B, BGE-M3, BGE-reranker)
 2. Connects to PostgreSQL and seeds the initial admin user
 3. Initializes the ChromaDB collection
 4. Creates storage directories and SQLite caches
@@ -405,14 +402,13 @@ The UI is available at `http://localhost:3000`.
 | `LLM_MMPROJ_FILENAME` | `mmproj-google_gemma-4-E4B-it-f16.gguf` | Gemma-4 vision projection filename |
 | `LLM_N_CTX` | `4096` | Gemma-4 context window (tokens) |
 | `LLM_N_THREADS` | `0` | CPU threads for inference (`0` = auto-detect) |
-| `QWEN_GGUF_REPO` | `bartowski/Qwen_Qwen3-4B-GGUF` | HF repo for Qwen3-4B (chat) |
-| `QWEN_GGUF_FILENAME` | `Qwen_Qwen3-4B-Q4_K_M.gguf` | Qwen3-4B GGUF filename |
-| `QWEN_N_CTX` | `8192` | Qwen3-4B context window (tokens) |
-| `QWEN_MAX_TOKENS` | `1024` | Max tokens per chat response |
-| `QWEN_TEMPERATURE` | `0.7` | Qwen3 sampling temperature |
-| `QWEN_TOP_P` | `0.8` | Qwen3 nucleus sampling threshold |
-| `QWEN_TOP_K` | `20` | Qwen3 top-k sampling |
-| `QWEN_DISABLE_THINKING` | `true` | Prepend `/no_think` to system prompt |
+| `CHAT_GGUF_REPO` | `bartowski/Llama-3.2-3B-Instruct-GGUF` | HF repo for Llama-3.2-3B (chat) |
+| `CHAT_GGUF_FILENAME` | `Llama-3.2-3B-Instruct-Q4_K_M.gguf` | Llama-3.2-3B GGUF filename |
+| `CHAT_N_CTX` | `8192` | Llama-3.2-3B context window (tokens) |
+| `CHAT_MAX_TOKENS` | `1024` | Max tokens per chat response |
+| `CHAT_TEMPERATURE` | `0.7` | Chat sampling temperature |
+| `CHAT_TOP_P` | `0.9` | Chat nucleus sampling threshold |
+| `CHAT_TOP_K` | `40` | Chat top-k sampling |
 | `RERANKER_MODEL_ID` | `BAAI/bge-reranker-v2-m3` | Cross-encoder reranker HF model ID |
 | `RETRIEVAL_TOP_K` | `10` | Chunks fetched from ChromaDB before reranking |
 | `RERANK_TOP_K` | `3` | Items passed to the LLM after reranking |
@@ -454,7 +450,7 @@ documentation_chat/
 │   │   │       └── image_parser.py
 │   │   ├── utils/
 │   │   │   ├── model_manager.py    # Loads all 4 models; get_vision_llm / get_chat_llm / get_reranker / get_embedder
-│   │   │   └── inference_queue.py  # FIFO semaphore shared by Gemma-4 + Qwen3
+│   │   │   └── inference_queue.py  # FIFO semaphore shared by Gemma-4 + Llama-3.2
 │   │   ├── config.py          # Pydantic settings from .env
 │   │   ├── schemas.py         # Pydantic request/response models
 │   │   ├── dependencies.py    # FastAPI dependency injection

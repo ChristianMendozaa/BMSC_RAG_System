@@ -28,17 +28,15 @@ class Settings(BaseSettings):
     llm_n_ctx: int = 4096
     llm_n_threads: int = 0      # 0 = auto-detect CPU count
 
-    # LLM de chat: Qwen3-4B GGUF — SOLO para generación de respuestas RAG (texto puro)
-    qwen_gguf_repo: str = "bartowski/Qwen_Qwen3-4B-GGUF"
-    qwen_gguf_filename: str = "Qwen_Qwen3-4B-Q4_K_M.gguf"
-    qwen_n_ctx: int = 8192
-    qwen_max_tokens: int = 1024
-    qwen_temperature: float = 0.7
-    qwen_top_p: float = 0.8
-    qwen_top_k: int = 20
-    qwen_repeat_penalty: float = 1.1
-    # Antepone /no_think al system prompt para deshabilitar thinking mode de Qwen3.5
-    qwen_disable_thinking: bool = True
+    # LLM de chat: Llama-3.2-3B-Instruct GGUF — SOLO para generación de respuestas RAG (texto puro)
+    chat_gguf_repo: str = "bartowski/Llama-3.2-3B-Instruct-GGUF"
+    chat_gguf_filename: str = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+    chat_n_ctx: int = 8192
+    chat_max_tokens: int = 1024
+    chat_temperature: float = 0.7
+    chat_top_p: float = 0.9
+    chat_top_k: int = 40
+    chat_repeat_penalty: float = 1.1
 
     # Reranker: BGE-reranker-v2-m3 vía FlagEmbedding (cross-encoder, fuera de inference_queue)
     reranker_model_id: str = "BAAI/bge-reranker-v2-m3"

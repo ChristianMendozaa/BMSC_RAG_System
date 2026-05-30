@@ -15,7 +15,7 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 _vision_llm: Any = None   # Gemma-4 multimodal — SOLO captioning durante ingesta
-_chat_llm: Any = None     # Qwen3.5-4B texto puro — SOLO generación de respuestas RAG
+_chat_llm: Any = None     # Llama-3.2-3B texto puro — SOLO generación de respuestas RAG
 _embedder: Any = None     # BGE-M3
 _reranker: Any = None     # BGE-reranker-v2-m3
 
@@ -73,27 +73,27 @@ def _load_all_sync() -> None:
     )
     logger.info("      Gemma-4 (visión) listo.")
 
-    logger.info("[2/4] LLM Chat (Qwen3.5-4B) — %s", settings.qwen_gguf_repo)
+    logger.info("[2/4] LLM Chat (Llama-3.2-3B) — %s", settings.chat_gguf_repo)
 
     try:
-        qwen_path = hf_hub_download(
-            repo_id=settings.qwen_gguf_repo,
-            filename=settings.qwen_gguf_filename,
+        chat_path = hf_hub_download(
+            repo_id=settings.chat_gguf_repo,
+            filename=settings.chat_gguf_filename,
             cache_dir=str(cache),
             local_files_only=True,
         )
     except Exception:
         raise RuntimeError(
-            "Qwen3.5-4B no encontrado en caché local. "
+            "Llama-3.2-3B no encontrado en caché local. "
             "Ejecuta primero: python download_models.py"
         )
 
-    logger.info("      GGUF: %s", qwen_path)
+    logger.info("      GGUF: %s", chat_path)
     logger.info("      Hilos: %d", n_threads)
 
     _chat_llm = Llama(
-        model_path=qwen_path,
-        n_ctx=settings.qwen_n_ctx,
+        model_path=chat_path,
+        n_ctx=settings.chat_n_ctx,
         n_batch=512,
         n_threads=n_threads,
         n_threads_batch=n_threads,
@@ -101,7 +101,7 @@ def _load_all_sync() -> None:
         use_mlock=True,
         verbose=False,
     )
-    logger.info("      Qwen3.5-4B (chat) listo.")
+    logger.info("      Llama-3.2-3B (chat) listo.")
 
     from sentence_transformers import SentenceTransformer
 

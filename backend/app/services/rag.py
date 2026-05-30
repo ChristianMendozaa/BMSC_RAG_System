@@ -34,9 +34,7 @@ Directrices:
 - El contexto puede incluir fragmentos de texto y descripciones textuales de figuras, tablas o
   diagramas extraídas de los documentos. Úsalas para responder preguntas sobre contenido visual."""
 
-SYSTEM_PROMPT = (
-    "/no_think\n" if settings.qwen_disable_thinking else ""
-) + _SYSTEM_PROMPT_BASE
+SYSTEM_PROMPT = _SYSTEM_PROMPT_BASE
 
 
 async def _fetch_image_descriptions(
@@ -278,63 +276,23 @@ async def stream_chat(
         try:
             stream = llm.create_chat_completion(
                 messages=messages,
-                max_tokens=settings.qwen_max_tokens,
+                max_tokens=settings.chat_max_tokens,
                 stream=True,
-                stop=["<|im_end|>", "<|endoftext|>", "Usuario:", "\nUser:"],
-                temperature=settings.qwen_temperature,
-                top_p=settings.qwen_top_p,
-                top_k=settings.qwen_top_k,
-                repeat_penalty=settings.qwen_repeat_penalty,
+                stop=["<|eot_id|>", "<|end_of_text|>", "Usuario:", "\nUser:"],
+                temperature=settings.chat_temperature,
+                top_p=settings.chat_top_p,
+                top_k=settings.chat_top_k,
+                repeat_penalty=settings.chat_repeat_penalty,
             )
-            # Filter <think>...</think> blocks that Qwen3 emits even with /no_think
-            in_think = False
-            think_buf = ""
             for chunk in stream:
-                delta = chunk["choices"][0]["delta"]
-                content: str = delta.get("content") or ""
+                content: str = chunk["choices"][0]["delta"].get("content") or ""
                 if not content:
                     continue
                 if llm_stats["n_tokens"] == 0:
                     llm_stats["first_token"] = time.perf_counter()
-                # Conteo real de tokens generados (incluye los <think> filtrados)
                 llm_stats["n_tokens"] += 1
-                think_buf += content
-                # Consume known think-block patterns from buffer
-                while True:
-                    if not in_think:
-                        idx = think_buf.find("<think>")
-                        if idx == -1:
-                            # No think block starting — emit everything
-                            emit, think_buf = think_buf, ""
-                            break
-                        # Emit text before <think>, then enter think mode
-                        emit = think_buf[:idx]
-                        think_buf = think_buf[idx + len("<think>"):]
-                        in_think = True
-                        if emit:
-                            asyncio.run_coroutine_threadsafe(
-                                token_queue.put(emit), loop
-                            ).result(timeout=30)
-                    else:
-                        idx = think_buf.find("</think>")
-                        if idx == -1:
-                            # Still inside think block — discard buffer
-                            think_buf = ""
-                            emit = ""
-                            break
-                        # Exit think mode, keep text after </think>
-                        think_buf = think_buf[idx + len("</think>"):].lstrip("\n")
-                        in_think = False
-                        emit = ""
-                        break
-                if emit:
-                    asyncio.run_coroutine_threadsafe(
-                        token_queue.put(emit), loop
-                    ).result(timeout=30)
-            # Flush remaining buffer (not in a think block)
-            if think_buf and not in_think:
                 asyncio.run_coroutine_threadsafe(
-                    token_queue.put(think_buf), loop
+                    token_queue.put(content), loop
                 ).result(timeout=30)
         except Exception as exc:
             logger.error("Error de inferencia LLM: %s", exc)
@@ -368,12 +326,12 @@ async def stream_chat(
             prefill = llm_stats["first_token"] - llm_stats["start"]
             gen_time = llm_stats["end"] - llm_stats["first_token"]
             tok_per_s = n_tokens / gen_time if gen_time > 0 else 0.0
-            _perf_log("prefill(TTFT Qwen3): %.3fs", prefill)
+            _perf_log("prefill(TTFT chat): %.3fs", prefill)
             _perf_log(
-                "generacion(Qwen3): %d tokens en %.2fs -> %.1f tok/s",
+                "generacion(chat): %d tokens en %.2fs -> %.1f tok/s",
                 n_tokens, gen_time, tok_per_s,
             )
         else:
-            _perf_log("generacion(Qwen3): sin tokens generados")
+            _perf_log("generacion(chat): sin tokens generados")
 
     yield "", sources

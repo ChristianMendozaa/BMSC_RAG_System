@@ -8,7 +8,7 @@ Descarga:
   [1/5] google_gemma-4-E4B-it-Q4_K_M.gguf          (~5.4 GB)  visión/captioning
   [2/5] mmproj-google_gemma-4-E4B-it-f16.gguf       (~1.0 GB)  proyector multimodal
   [3/5] BAAI/bge-m3                                  (~1.1 GB)  embeddings
-  [4/5] Qwen_Qwen3-4B-Q4_K_M.gguf                   (~2.6 GB)  chat RAG
+  [4/5] Llama-3.2-3B-Instruct-Q4_K_M.gguf           (~2.0 GB)  chat RAG
   [5/5] BAAI/bge-reranker-v2-m3                      (~1.1 GB)  reranker cross-encoder
 """
 
@@ -32,8 +32,8 @@ LLM_GGUF_REPO       = os.getenv("LLM_GGUF_REPO",        "bartowski/google_gemma-
 LLM_GGUF_FILENAME   = os.getenv("LLM_GGUF_FILENAME",    "google_gemma-4-E4B-it-Q4_K_M.gguf")
 LLM_MMPROJ_FILE     = os.getenv("LLM_MMPROJ_FILENAME",  "mmproj-google_gemma-4-E4B-it-f16.gguf")
 EMBED_MODEL_ID      = os.getenv("EMBED_MODEL_ID",        "BAAI/bge-m3")
-QWEN_GGUF_REPO      = os.getenv("QWEN_GGUF_REPO",       "bartowski/Qwen_Qwen3-4B-GGUF")
-QWEN_GGUF_FILENAME  = os.getenv("QWEN_GGUF_FILENAME",   "Qwen_Qwen3-4B-Q4_K_M.gguf")
+CHAT_GGUF_REPO      = os.getenv("CHAT_GGUF_REPO",       "bartowski/Llama-3.2-3B-Instruct-GGUF")
+CHAT_GGUF_FILENAME  = os.getenv("CHAT_GGUF_FILENAME",   "Llama-3.2-3B-Instruct-Q4_K_M.gguf")
 RERANKER_MODEL_ID   = os.getenv("RERANKER_MODEL_ID",     "BAAI/bge-reranker-v2-m3")
 
 cache = Path(HF_CACHE_DIR)
@@ -112,7 +112,7 @@ print("=" * 60)
 _download_file("[1/5] LLM Visión/Gemma-4 (~5.4 GB)",     LLM_GGUF_REPO,  LLM_GGUF_FILENAME)
 _download_file("[2/5] Proyector multimodal (~1 GB)",       LLM_GGUF_REPO,  LLM_MMPROJ_FILE)
 _download_snapshot("[3/5] Embeddings BGE-M3 (~1.1 GB)",   EMBED_MODEL_ID, cache / "bge-m3")
-_download_file("[4/5] LLM Chat/Qwen3.5-4B (~2.6 GB)",     QWEN_GGUF_REPO, QWEN_GGUF_FILENAME)
+_download_file("[4/5] LLM Chat/Llama-3.2-3B (~2.0 GB)",   CHAT_GGUF_REPO, CHAT_GGUF_FILENAME)
 _download_snapshot("[5/5] Reranker BGE-v2-m3 (~1.1 GB)",  RERANKER_MODEL_ID, cache / "bge-reranker-v2-m3")
 
 print("\n" + "=" * 60)

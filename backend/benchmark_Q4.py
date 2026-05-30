@@ -106,7 +106,7 @@ TEST_QUESTIONS = [
 # ── Modelos candidatos a evaluar ─────────────────────────────────────────────
 MODELS_TO_TEST = [
     {
-        "nombre": "Qwen3-4B (Modelo Actual del Backend - Q4)",
+        "nombre": "Qwen3-4B (Q4)",
         "repo_id": "bartowski/Qwen_Qwen3-4B-GGUF",
         "filename": "Qwen_Qwen3-4B-Q4_K_M.gguf",
     },
@@ -121,7 +121,7 @@ MODELS_TO_TEST = [
         "filename": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
     },
     {
-        "nombre": "Llama-3.2-3B-Instruct (Q4)",
+        "nombre": "Llama-3.2-3B-Instruct (Modelo Actual del Backend - Q4)",
         "repo_id": "bartowski/Llama-3.2-3B-Instruct-GGUF",
         "filename": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
     },
