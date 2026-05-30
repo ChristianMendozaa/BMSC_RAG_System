@@ -1,0 +1,46 @@
+# PROTOCOLO MANTENIMIENTO - MANUAL LEVANTAR SERVICIOS UIPATH RPAS BMSC
+
+## LISTADO DE SERVIDORES UIPATH BMSC
+| Nombre Equipo | Sesión | IP Servidor | Usuario |
+| :--- | :---: | :--- | :--- |
+| HVADIFEJREN01 | 1 | 172.24.3.51 | Gestor |
+| HVADIFEJREN01 | 2 | 172.24.3.51-2 | Agente1 |
+| HVADIFSAREN01 | 1 | 172.24.3.50 | Gestor |
+| HAVDIFEJREN02 | 1 | 172.24.3.52 | Gestor |
+| HAVDIFEJREN02 | 2 | 172.24.3.52-2 | Agente1 |
+| HAVDIFEJREN03 | 1 | 172.24.3.53 | Gestor |
+| HAVDIFEJREN03 | 2 | 172.24.3.53-2 | Agente1 |
+| HAVDIFEJREN04 | 1 | 172.24.3.59 | Gestor |
+| HAVDIFEJREN04 | 2 | 172.24.3.59-2 | Agente1 |
+| HAVDIFEJREN06 | 1 | 172.24.3.46 | Gestor |
+| HAVDIFEJREN06 | 2 | 172.24.3.46-2 | Agente1 |
+| HAVDIFEJREN07 | 1 | 172.24.3.60 | Gestor |
+| HAVDIFEJREN07 | 2 | 172.24.3.60-2 | Agente1 |
+| HAVDIFEJREN05 | 1 | 172.24.3.47 | Gestor |
+| HAVDIFEJREN05 | 2 | 172.24.3.47-2 | Agente1 |
+
+## PASOS DE MANTENIMIENTO REGULAR
+1. [cite_start]Iniciar el mantenimiento de los servidores con el reinicio de la máquina[cite: 5].
+2. [cite_start]Cambiar la resolución del monitor a 1920x1080 (Nota: no siempre se puede cambiar)[cite: 6].
+3. [cite_start]Ejecutar UiPath Assistant como administrador[cite: 32].
+4. [cite_start]El servicio UiPath Robot debería levantar solo después del reinicio, por lo que el logueo del usuario debería ser automático[cite: 40]. [cite_start]Si el usuario NO está logueado (estado "Desconectado"), hacer clic derecho en las iniciales de logueo y escoger 'Preferences'[cite: 40, 50].
+5. [cite_start]Clic en "Orchestrator Settings", y después clic en "Sign Out"[cite: 66].
+6. [cite_start]Se abrirá una ventana en el navegador, esta se debe cerrar (clic en la X)[cite: 83].
+7. [cite_start]Observar la pantalla de UiPath Assistant; el status debe estar en verde o amarillo indicando "Conectado Desatendido" (Connected as Unattended)[cite: 93].
+8. [cite_start]Una vez conectado, cerrar la ventana haciendo clic en la X[cite: 113].
+
+## NOTAS IMPORTANTES DEL MANTENIMIENTO
+* [cite_start]Excepción Servidor 51: Solo en el caso de la máquina 172.24.3.51 se deben levantar los dispatchers correspondientes a los procesos P1, P2, P3 y P4 que están localizados en el escritorio del servidor[cite: 133].
+* Cierre: Terminada la configuración, cerrar todas las pantallas emergentes, dejar el escritorio sin ninguna ventana abierta y bloquear la máquina. [cite_start]Con esto el mantenimiento está concluido[cite: 134].
+* [cite_start]Verificación final: Se debe verificar el correcto funcionamiento de los servidores en el orquestador de UiPath[cite: 249].
+
+## CASOS EXCEPCIONALES (SOLUCIÓN DE PROBLEMAS)
+[cite_start]Problema: En UiPath Assistant, el status del logueo está en color rojo, lo que significa que hubo un problema al levantar el servicio UiPath Robot[cite: 135, 136].
+
+Solución (Levantar servicio manualmente):
+1. [cite_start]Ingresar a la configuración de servicios por la barra de búsqueda de Windows y abrir "Servicios" (Ejecutar como Administrador)[cite: 146].
+2. [cite_start]Escoger el servicio "UiPath Robot"[cite: 196].
+3. [cite_start]Hacer clic derecho y seleccionar la opción "Iniciar"[cite: 197].
+4. [cite_start]Configuración de auto-arranque (si es necesario): Hacer clic derecho en el servicio UiPath Robot -> Propiedades[cite: 205]. Escoger la pestaña "Recuperación" y en las opciones de Primer error, Segundo error y Tercer error, colocar la opción "Reiniciar el servicio". [cite_start]Luego hacer clic en "Aplicar"[cite: 208].
+5. [cite_start]Una vez iniciado el servicio, el status cambiará a "En ejecución"[cite: 243].
+6. Volver a UiPath Assistant y hacer clic en 'Volver a cargar' (Refresh). [cite_start]El icono debe cambiar a verde[cite: 243, 245].
