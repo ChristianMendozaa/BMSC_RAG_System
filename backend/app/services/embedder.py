@@ -2,6 +2,7 @@ import asyncio
 import base64
 import logging
 
+from app.config import settings
 from app.cache import embedding_cache
 from app.utils.model_manager import get_embedder, get_vision_llm
 from app.utils.inference_queue import inference_queue
@@ -43,12 +44,33 @@ async def embed_texts_batch(texts: list[str]) -> list[list[float]]:
     return await asyncio.to_thread(_embed_texts_batch_sync, texts)
 
 
-async def describe_image(image_bytes: bytes) -> str:
+_CAPTION_INSTRUCTION = (
+    "Describe esta imagen en español de forma concisa y detallada. "
+    "Incluye todos los elementos visuales relevantes: texto visible, "
+    "diagramas, tablas, figuras, y su significado en contexto bancario."
+)
+
+
+async def describe_image(image_bytes: bytes, page_context: str = "") -> str:
     """Genera una descripción en español de la imagen usando Gemma-4 visión.
+
+    `page_context` es el texto de la página donde aparece la imagen; se inyecta
+    como contexto (no se copia) para que la VLM interprete mejor la figura.
 
     Pasa por inference_queue internamente — el caller no necesita hacerlo.
     """
     b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    prompt_text = _CAPTION_INSTRUCTION
+    context = page_context.strip()
+    if context:
+        prompt_text = (
+            "Contexto del documento donde aparece la imagen (úsalo solo para "
+            "entender la imagen; NO lo copies ni lo repitas literalmente):\n"
+            f'"""\n{context}\n"""\n\n'
+            + _CAPTION_INSTRUCTION
+        )
+
     messages = [
         {
             "role": "user",
@@ -59,11 +81,7 @@ async def describe_image(image_bytes: bytes) -> str:
                 },
                 {
                     "type": "text",
-                    "text": (
-                        "Describe esta imagen en español de forma concisa y detallada. "
-                        "Incluye todos los elementos visuales relevantes: texto visible, "
-                        "diagramas, tablas, figuras, y su significado en contexto bancario."
-                    ),
+                    "text": prompt_text,
                 },
             ],
         }
@@ -73,8 +91,8 @@ async def describe_image(image_bytes: bytes) -> str:
         llm = get_vision_llm()
         response = llm.create_chat_completion(
             messages=messages,
-            max_tokens=300,
-            temperature=0.1,
+            max_tokens=settings.vision_max_tokens,
+            temperature=settings.vision_temperature,
         )
         return response["choices"][0]["message"]["content"].strip()
 

@@ -163,8 +163,10 @@ Endpoints del panel de administración agregados en el overhaul (permisos mínim
 | `CHROMA_PATH` | ChromaDB persistence dir (default: `./data/chroma`) |
 | `HF_CACHE_DIR` | Model weights cache (default: `./models_cache`) |
 | `LLM_GGUF_REPO` / `LLM_GGUF_FILENAME` / `LLM_MMPROJ_FILENAME` | Gemma-4 vision model (captioning) |
-| `LLM_N_CTX` | Gemma-4 context window in tokens (default: 4096) |
+| `LLM_N_CTX` | Gemma-4 context window in tokens (default: 2048 — captioning needs ~860; smaller KV cache = less RAM) |
 | `LLM_N_THREADS` | CPU threads for inference (`0` = auto-detect) |
+| `VISION_MAX_TOKENS` | Max tokens per image caption (default: 256) |
+| `VISION_TEMPERATURE` | Sampling temperature for captioning (default: 0.1, near-deterministic) |
 | `CHAT_GGUF_REPO` / `CHAT_GGUF_FILENAME` | Llama-3.2-3B chat model |
 | `CHAT_N_CTX` | Llama-3.2-3B context window (default: 8192) |
 | `CHAT_MAX_TOKENS` | Max tokens per chat response (default: 1024) |

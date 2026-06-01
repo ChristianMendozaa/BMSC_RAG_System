@@ -60,11 +60,22 @@ def _load_all_sync() -> None:
     logger.info("      mmproj: %s", mmproj_path)
     logger.info("      Hilos: %d (%d cores, 2 reservados al SO)", n_threads, total_cores)
 
+    # El shorthand clip_model_path en Llama() NO conecta el proyector multimodal
+    # (en llama-cpp-python 0.3.x ni siquiera es un kwarg válido: se ignora y las
+    # imágenes se descartan). Hay que pasar un chat_handler explícito que cargue
+    # el mmproj y renderice la plantilla de turnos de Gemma.
+    from app.utils.gemma_vision_handler import make_gemma4_handler
+
+    vision_handler = make_gemma4_handler()(
+        clip_model_path=mmproj_path,
+        verbose=False,
+    )
+
     _vision_llm = Llama(
         model_path=gguf_path,
-        clip_model_path=mmproj_path,
+        chat_handler=vision_handler,
         n_ctx=settings.llm_n_ctx,
-        n_batch=512,
+        n_batch=2048,        # mismo que el chat — prefill en un solo lote para imágenes de 272 tokens
         n_threads=n_threads,
         n_threads_batch=n_threads,
         use_mmap=False,

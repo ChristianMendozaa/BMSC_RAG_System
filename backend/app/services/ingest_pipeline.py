@@ -27,6 +27,9 @@ _CAPTION_EXTRACT_RE = re.compile(
 )
 _IMG_MARKER_RE = re.compile(r'\[IMG:([a-f0-9\-]{36})\]')
 
+# Tope de texto de página que se pasa a la VLM como contexto por imagen.
+_PAGE_CONTEXT_MAX_CHARS = 600
+
 
 def _extract_figure_caption(text: str) -> str:
     m = _CAPTION_EXTRACT_RE.search(text)
@@ -249,6 +252,16 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
 
     image_descriptions: dict[int, str] = {}
 
+    # Texto por página (en orden de lectura, acotado) para dar contexto a la VLM.
+    page_context_map: dict = defaultdict(list)
+    for tb in parse_result.text_blocks:
+        page_context_map[tb.page_number].append((getattr(tb, "y_position", 0.0), tb.text))
+
+    def _page_context(page_number) -> str:
+        blocks = sorted(page_context_map.get(page_number, []), key=lambda x: x[0])
+        joined = " ".join(t.strip() for _, t in blocks if t.strip())
+        return joined[:_PAGE_CONTEXT_MAX_CHARS]
+
     if total_images > 0:
         logger.info("doc_id=%s: [4/5] Describiendo imágenes con Gemma (0/%d)...", doc_id, total_images)
 
@@ -268,7 +281,10 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
             doc_id, i + 1, total_images, img_block.page_number,
         )
         try:
-            description = await embedder.describe_image(img_block.data)
+            description = await embedder.describe_image(
+                img_block.data,
+                page_context=_page_context(img_block.page_number),
+            )
             image_descriptions[img_block.image_index] = description
             logger.info(
                 "doc_id=%s: [Image %d/%d] OK — %d caracteres de descripción",

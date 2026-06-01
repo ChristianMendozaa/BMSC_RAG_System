@@ -25,8 +25,12 @@ class Settings(BaseSettings):
     llm_gguf_repo: str = "bartowski/google_gemma-4-E4B-it-GGUF"
     llm_gguf_filename: str = "google_gemma-4-E4B-it-Q4_K_M.gguf"
     llm_mmproj_filename: str = "mmproj-google_gemma-4-E4B-it-f16.gguf"
-    llm_n_ctx: int = 4096
+    # ~256 tokens de imagen + ~250 de contexto de página + prompt + generación ≈ 860,
+    # así que 2048 deja holgura de sobra y achica la KV cache (menos RAM, algo más rápido).
+    llm_n_ctx: int = 2048
     llm_n_threads: int = 0      # 0 = auto-detect CPU count
+    vision_max_tokens: int = 256    # tope de tokens por descripción de imagen (captioning)
+    vision_temperature: float = 0.1  # casi determinista para captions fieles
 
     # LLM de chat: Llama-3.2-3B-Instruct GGUF — SOLO para generación de respuestas RAG (texto puro)
     chat_gguf_repo: str = "bartowski/Llama-3.2-3B-Instruct-GGUF"
