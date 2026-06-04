@@ -64,6 +64,36 @@ body {
   animation: slideUp 0.2s ease-out forwards;
 }
 
+/* Morph thinking animation */
+@keyframes morph-0 {
+  0%, 100% { transform: translate(-8px, -8px) scale(1);   opacity: 0.9; border-radius: 2px; }
+  25%       { transform: translate( 8px, -8px) scale(0.8); opacity: 0.6; border-radius: 50%; }
+  50%       { transform: translate( 8px,  8px) scale(1.1); opacity: 1;   border-radius: 2px; }
+  75%       { transform: translate(-8px,  8px) scale(0.8); opacity: 0.6; border-radius: 50%; }
+}
+@keyframes morph-1 {
+  0%, 100% { transform: translate( 8px, -8px) scale(0.8); opacity: 0.6; border-radius: 50%; }
+  25%       { transform: translate( 8px,  8px) scale(1.1); opacity: 1;   border-radius: 2px; }
+  50%       { transform: translate(-8px,  8px) scale(0.8); opacity: 0.6; border-radius: 50%; }
+  75%       { transform: translate(-8px, -8px) scale(1);   opacity: 0.9; border-radius: 2px; }
+}
+@keyframes morph-2 {
+  0%, 100% { transform: translate( 8px,  8px) scale(1.1); opacity: 1;   border-radius: 2px; }
+  25%       { transform: translate(-8px,  8px) scale(0.8); opacity: 0.6; border-radius: 50%; }
+  50%       { transform: translate(-8px, -8px) scale(1);   opacity: 0.9; border-radius: 2px; }
+  75%       { transform: translate( 8px, -8px) scale(0.8); opacity: 0.6; border-radius: 50%; }
+}
+@keyframes morph-3 {
+  0%, 100% { transform: translate(-8px,  8px) scale(0.8); opacity: 0.6; border-radius: 50%; }
+  25%       { transform: translate(-8px, -8px) scale(1);   opacity: 0.9; border-radius: 2px; }
+  50%       { transform: translate( 8px, -8px) scale(0.8); opacity: 0.6; border-radius: 50%; }
+  75%       { transform: translate( 8px,  8px) scale(1.1); opacity: 1;   border-radius: 2px; }
+}
+@keyframes thinking-fade {
+  0%, 100% { opacity: 0.5; }
+  50%       { opacity: 1; }
+}
+
 /* Underline dorado en nav links */
 .nav-link {
   position: relative;

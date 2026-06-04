@@ -10,12 +10,12 @@ from app.core.security import get_password_hash
 from app.db.models.role import PGRole
 from app.db.models.user import PGUser
 from app.db.schemas.user import (
+    EmailUpdateRequest,
     PasswordResetRequest,
     RoleAssignRequest,
     UserCreate,
     UserOut,
     UserUpdate,
-    UsernameUpdateRequest,
     UsersListResponse,
 )
 from app.db.session import get_pg_db
@@ -57,8 +57,12 @@ async def create_user(
     db: AsyncSession = Depends(get_pg_db),
     current_user: PGUser = Depends(require_permission("can_manage_users")),
 ):
+    email_normalized = body.email.strip().lower()
+    # Derivar nombre visible de la parte antes del @
+    username_derived = email_normalized.split("@")[0]
     new_user = PGUser(
-        username=body.username,
+        username=username_derived,
+        email=email_normalized,
         hashed_password=get_password_hash(body.password),
         role_id=body.role_id,
         is_active=body.is_active,
@@ -72,7 +76,7 @@ async def create_user(
         return user
     except Exception:
         await db.rollback()
-        raise HTTPException(status_code=400, detail="El nombre de usuario ya existe")
+        raise HTTPException(status_code=400, detail="El correo ya está registrado")
 
 
 @router.put("/{user_id}", response_model=UserOut)
@@ -213,22 +217,26 @@ async def update_user_role(
     return updated
 
 
-@router.patch("/{user_id}/username", response_model=UserOut)
-async def update_username(
+@router.patch("/{user_id}/email", response_model=UserOut)
+async def update_email(
     user_id: uuid.UUID,
-    body: UsernameUpdateRequest,
+    body: EmailUpdateRequest,
     db: AsyncSession = Depends(get_pg_db),
     _: PGUser = Depends(require_permission("can_manage_users")),
 ):
-    """Cambia el nombre de usuario. Permitido incluso para usuarios del sistema."""
+    """Cambia el correo de un usuario (y re-deriva su nombre visible). No permitido para el admin del sistema."""
     user = await db.scalar(select(PGUser).where(PGUser.id == user_id))
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    user.username = body.username
+    if user.is_system:
+        raise HTTPException(status_code=400, detail="No se puede cambiar el correo del administrador del sistema")
+    email_normalized = body.email.strip().lower()
+    user.email = email_normalized
+    user.username = email_normalized.split("@")[0]
     try:
         await db.commit()
         updated = await db.scalar(select(PGUser).where(PGUser.id == user_id))
         return updated
     except Exception:
         await db.rollback()
-        raise HTTPException(status_code=400, detail="El nombre de usuario ya existe")
+        raise HTTPException(status_code=400, detail="El correo ya está registrado")

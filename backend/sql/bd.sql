@@ -42,7 +42,8 @@ CREATE TABLE roles (
 -- reactiva al usuario, forzando re-login sin necesidad de tracking de JTIs.
 CREATE TABLE users (
     id                  UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-    username            VARCHAR(100) NOT NULL UNIQUE,
+    username            VARCHAR(100) NOT NULL,
+    email               VARCHAR(255) UNIQUE,
     hashed_password     VARCHAR(255) NOT NULL,
     role_id             UUID         REFERENCES roles(id) ON DELETE SET NULL,
     is_active           BOOLEAN      NOT NULL DEFAULT true,

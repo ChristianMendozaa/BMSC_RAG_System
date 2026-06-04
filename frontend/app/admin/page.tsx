@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import {
   getRoles, createRole, updateRole, deleteRole,
-  getUsers, createUser, deactivateUser, activateUser, resetUserPassword, assignUserRole, renameUser,
+  getUsers, createUser, deactivateUser, activateUser, resetUserPassword, assignUserRole, changeUserEmail,
   getCollections, createCollection, deleteCollection, CollectionHasDocumentsError,
   getCollectionRolePerms, updateCollectionRolePerm,
   getCollectionUserPerms, updateCollectionUserPerm, deleteCollectionUserPerm,
@@ -350,7 +350,7 @@ function AssignRoleModal({
   );
 }
 
-function RenameUsernameModal({
+function ChangeEmailModal({
   user, onClose, onDone, flash,
 }: {
   user: UserOut;
@@ -358,16 +358,17 @@ function RenameUsernameModal({
   onDone: () => void;
   flash: (msg: string, type?: 'ok' | 'err') => void;
 }) {
-  const [username, setUsername] = useState(user.username);
+  const [email, setEmail] = useState(user.email ?? '');
   const [busy, setBusy] = useState(false);
-  const valid = username.trim().length >= 1 && username.trim() !== user.username;
+  const trimmed = email.trim().toLowerCase();
+  const valid = trimmed.length >= 3 && trimmed.includes('@') && trimmed !== (user.email ?? '').toLowerCase();
 
   const save = async () => {
     if (!valid) return;
     setBusy(true);
     try {
-      await renameUser(user.id, username.trim());
-      flash(`Nombre de usuario actualizado a "${username.trim()}"`);
+      await changeUserEmail(user.id, trimmed);
+      flash(`Correo actualizado. El usuario ahora inicia sesión con "${trimmed}"`);
       onDone();
       onClose();
     } catch (err) {
@@ -388,16 +389,16 @@ function RenameUsernameModal({
             className="text-base font-semibold mb-2"
             style={{ color: 'var(--gold-bright)', fontFamily: 'Playfair Display, serif' }}
           >
-            Cambiar nombre de usuario
+            Cambiar correo
           </Dialog.Title>
           <Dialog.Description className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
-            Nuevo nombre para <strong>{user.username}</strong>.
+            Nuevo correo de acceso para <strong>{user.username}</strong>. El nombre visible se actualizará automáticamente.
           </Dialog.Description>
           <Input
-            type="text"
-            placeholder="Nuevo nombre de usuario"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
+            type="email"
+            placeholder="nuevo@bmsc.com.bo"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
             autoFocus
           />
           <div className="flex justify-end gap-2 mt-5">
@@ -425,7 +426,7 @@ function RenameUsernameModal({
 
 function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
   const [users, setUsers] = useState<UserOut[]>([]);
-  const [form, setForm] = useState({ username: '', password: '', role_id: '' });
+  const [form, setForm] = useState({ email: '', password: '', role_id: '' });
   const [confirmPw, setConfirmPw] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [showConfirmPw, setShowConfirmPw] = useState(false);
@@ -434,7 +435,7 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
   const [confirmDeactivate, setConfirmDeactivate] = useState<{ id: string; username: string } | null>(null);
   const [resetPwUser, setResetPwUser] = useState<UserOut | null>(null);
   const [assignRoleUser, setAssignRoleUser] = useState<UserOut | null>(null);
-  const [renameUsernameUser, setRenameUsernameUser] = useState<UserOut | null>(null);
+  const [changeEmailUser, setChangeEmailUser] = useState<UserOut | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
 
   // Filter state
@@ -461,14 +462,15 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
   }, [userSearch]);
 
   const passwordsValid = form.password.length >= 4 && form.password === confirmPw;
+  const emailValid = form.email.trim().includes('@') && form.email.trim().length >= 3;
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!passwordsValid) return;
+    if (!passwordsValid || !emailValid) return;
     setBusy(true);
     try {
-      await createUser({ username: form.username, password: form.password, role_id: form.role_id });
-      setForm({ username: '', password: '', role_id: '' });
+      await createUser({ email: form.email.trim().toLowerCase(), password: form.password, role_id: form.role_id });
+      setForm({ email: '', password: '', role_id: '' });
       setConfirmPw(''); setShowPw(false); setShowConfirmPw(false);
       await load();
       flash('Usuario creado correctamente');
@@ -500,7 +502,7 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
     let r = [...users];
     if (userSearchD.trim()) {
       const q = userSearchD.toLowerCase();
-      r = r.filter(u => u.username.toLowerCase().includes(q));
+      r = r.filter(u => u.username.toLowerCase().includes(q) || (u.email ?? '').toLowerCase().includes(q));
     }
     if (userStatusFilter === 'active')   r = r.filter(u => u.is_active);
     if (userStatusFilter === 'inactive') r = r.filter(u => !u.is_active);
@@ -523,8 +525,8 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
       {assignRoleUser && (
         <AssignRoleModal user={assignRoleUser} roles={roles} onClose={() => setAssignRoleUser(null)} onDone={load} flash={flash} />
       )}
-      {renameUsernameUser && (
-        <RenameUsernameModal user={renameUsernameUser} onClose={() => setRenameUsernameUser(null)} onDone={load} flash={flash} />
+      {changeEmailUser && (
+        <ChangeEmailModal user={changeEmailUser} onClose={() => setChangeEmailUser(null)} onDone={load} flash={flash} />
       )}
       <ConfirmModal
         open={!!confirmDeactivate}
@@ -539,8 +541,8 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
         <SectionTitle>Registrar Usuario</SectionTitle>
         <form onSubmit={handleCreate} className="grid grid-cols-1 gap-3 max-w-md">
           <Input
-            type="text" placeholder="Nombre de usuario" required
-            value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })}
+            type="email" placeholder="correo@bmsc.com.bo" required
+            value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })}
           />
           <div className="relative">
             <Input
@@ -574,7 +576,7 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
             <option value="">Seleccionar rol</option>
             {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
           </Select>
-          <BtnPrimary type="submit" disabled={busy || !passwordsValid}>
+          <BtnPrimary type="submit" disabled={busy || !passwordsValid || !emailValid}>
             <Plus size={14} /> {busy ? 'Creando...' : 'Crear Usuario'}
           </BtnPrimary>
         </form>
@@ -588,7 +590,7 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <div className="relative flex-1 min-w-[180px]">
             <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} />
-            <Input type="text" placeholder="Buscar por usuario..." value={userSearch}
+            <Input type="text" placeholder="Buscar por nombre o correo..." value={userSearch}
               onChange={(e) => setUserSearch(e.target.value)} style={{ paddingLeft: 30 }} />
           </div>
           <Select value={userStatusFilter} onChange={(e) => setUserStatusFilter(e.target.value as '' | 'active' | 'inactive')} className="text-xs w-36">
@@ -644,6 +646,9 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
                         </span>
                       )}
                     </div>
+                    {u.email && (
+                      <p className="text-xs" style={{ color: 'var(--text-muted)', fontFamily: 'DM Sans, sans-serif' }}>{u.email}</p>
+                    )}
                     {noRole ? (
                       <span
                         className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded mt-0.5 border"
@@ -684,14 +689,16 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
                   >
                     <Key size={11} /> Contraseña
                   </button>
-                  <button
-                    onClick={() => setRenameUsernameUser(u)}
-                    className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors"
-                    style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
-                    title="Cambiar nombre de usuario"
-                  >
-                    <Pencil size={11} /> Nombre
-                  </button>
+                  {!u.is_system && (
+                    <button
+                      onClick={() => setChangeEmailUser(u)}
+                      className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors"
+                      style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
+                      title="Cambiar correo de acceso"
+                    >
+                      <Pencil size={11} /> Correo
+                    </button>
+                  )}
                   {!u.is_system && (
                     u.is_active ? (
                       <button

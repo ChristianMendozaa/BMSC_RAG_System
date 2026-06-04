@@ -1,7 +1,7 @@
 'use client';
 
 import * as Dialog from '@radix-ui/react-dialog';
-import { AlertTriangle, History, MessageSquare, Trash2, X } from 'lucide-react';
+import { AlertTriangle, History, MessageSquare, Pencil, Trash2, X } from 'lucide-react';
 import type { BlockerItem, ChatSessionListItem } from '@/types';
 
 // ── Relative time formatter (Spanish) ────────────────────────────────────────
@@ -51,6 +51,7 @@ interface ChatHistoryPanelProps {
   activeSessionId: string | null;
   onResume: (id: string) => void;
   onDelete: (id: string) => void;
+  onRename: (id: string) => void;
   loading: boolean;
 }
 
@@ -59,6 +60,7 @@ export default function ChatHistoryPanel({
   activeSessionId,
   onResume,
   onDelete,
+  onRename,
   loading,
 }: ChatHistoryPanelProps) {
   return (
@@ -146,6 +148,7 @@ export default function ChatHistoryPanel({
               isActive={s.id === activeSessionId}
               onResume={onResume}
               onDelete={onDelete}
+              onRename={onRename}
             />
           ))
         )}
@@ -161,9 +164,10 @@ interface SessionRowProps {
   isActive: boolean;
   onResume: (id: string) => void;
   onDelete: (id: string) => void;
+  onRename: (id: string) => void;
 }
 
-function SessionRow({ session, isActive, onResume, onDelete }: SessionRowProps) {
+function SessionRow({ session, isActive, onResume, onDelete, onRename }: SessionRowProps) {
   return (
     <div
       className="group/session"
@@ -200,7 +204,7 @@ function SessionRow({ session, isActive, onResume, onDelete }: SessionRowProps) 
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
           lineHeight: 1.35,
-          paddingRight: '22px',
+          paddingRight: '44px',
           display: 'block',
         }}
         title={session.title}
@@ -239,6 +243,38 @@ function SessionRow({ session, isActive, onResume, onDelete }: SessionRowProps) 
         </span>
       </div>
 
+      {/* Rename — visible only on hover */}
+      <button
+        className="opacity-0 group-hover/session:opacity-100"
+        onClick={(e) => {
+          e.stopPropagation();
+          onRename(session.id);
+        }}
+        style={{
+          position: 'absolute',
+          right: '26px',
+          top: '6px',
+          padding: '2px',
+          borderRadius: '4px',
+          border: 'none',
+          background: 'transparent',
+          cursor: 'pointer',
+          color: 'var(--text-muted)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          transition: 'color 120ms',
+        }}
+        onMouseEnter={(e) => {
+          (e.currentTarget as HTMLButtonElement).style.color = 'var(--gold-bright)';
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)';
+        }}
+        title="Renombrar conversación"
+      >
+        <Pencil size={11} />
+      </button>
       {/* Trash — visible only on hover */}
       <button
         className="opacity-0 group-hover/session:opacity-100"

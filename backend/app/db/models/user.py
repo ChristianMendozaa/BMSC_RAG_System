@@ -15,7 +15,8 @@ class PGUser(PGBase):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    username: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    username: Mapped[str] = mapped_column(String(100), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     role_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("roles.id", ondelete="SET NULL"), nullable=True

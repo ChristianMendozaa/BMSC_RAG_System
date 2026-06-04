@@ -1,17 +1,18 @@
 'use client';
 
 import { KeyboardEvent, useRef } from 'react';
-import { SendHorizonal } from 'lucide-react';
+import { SendHorizonal, Square } from 'lucide-react';
 
 interface Props {
   value: string;
   onChange: (value: string) => void;
   onSubmit: (text: string) => void;
+  onStop?: () => void;
   isStreaming: boolean;
   disabled?: boolean;
 }
 
-export default function MessageInput({ value, onChange, onSubmit, isStreaming, disabled = false }: Props) {
+export default function MessageInput({ value, onChange, onSubmit, onStop, isStreaming, disabled = false }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isDisabled = isStreaming || disabled;
@@ -55,28 +56,49 @@ export default function MessageInput({ value, onChange, onSubmit, isStreaming, d
           target.style.height = `${Math.min(target.scrollHeight, 144)}px`;
         }}
       />
-      <button
-        onClick={handleSubmit}
-        disabled={!value.trim() || isDisabled}
-        className="p-2 rounded-xl transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
-        style={{
-          background: 'var(--gold-bright)',
-          color: '#0A1A10',
-        }}
-        onMouseEnter={(e) => {
-          if (!e.currentTarget.disabled) {
+      {isStreaming ? (
+        <button
+          onClick={onStop}
+          disabled={!onStop}
+          className="p-2 rounded-xl transition-colors shrink-0"
+          style={{
+            background: 'var(--gold-bright)',
+            color: '#0A1A10',
+          }}
+          onMouseEnter={(e) => {
             (e.currentTarget as HTMLButtonElement).style.background = 'var(--gold-muted)';
-          }
-        }}
-        onMouseLeave={(e) => {
-          if (!e.currentTarget.disabled) {
+          }}
+          onMouseLeave={(e) => {
             (e.currentTarget as HTMLButtonElement).style.background = 'var(--gold-bright)';
-          }
-        }}
-        aria-label="Enviar pregunta"
-      >
-        <SendHorizonal size={16} />
-      </button>
+          }}
+          aria-label="Detener generación"
+        >
+          <Square size={16} fill="currentColor" />
+        </button>
+      ) : (
+        <button
+          onClick={handleSubmit}
+          disabled={!value.trim() || isDisabled}
+          className="p-2 rounded-xl transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+          style={{
+            background: 'var(--gold-bright)',
+            color: '#0A1A10',
+          }}
+          onMouseEnter={(e) => {
+            if (!e.currentTarget.disabled) {
+              (e.currentTarget as HTMLButtonElement).style.background = 'var(--gold-muted)';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!e.currentTarget.disabled) {
+              (e.currentTarget as HTMLButtonElement).style.background = 'var(--gold-bright)';
+            }
+          }}
+          aria-label="Enviar pregunta"
+        >
+          <SendHorizonal size={16} />
+        </button>
+      )}
     </div>
   );
 }

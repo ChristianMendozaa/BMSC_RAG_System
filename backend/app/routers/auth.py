@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token, decode_token, verify_password
@@ -20,9 +20,19 @@ async def login(
     body: LoginRequest,
     db: AsyncSession = Depends(get_pg_db),
 ):
+    # Primero buscar por correo (usuarios normales)
+    ident = body.identifier.strip()
     user = await db.scalar(
-        select(PGUser).where(PGUser.username == body.username)
+        select(PGUser).where(func.lower(PGUser.email) == ident.lower())
     )
+    # Si no se encontró por correo, permitir login por username solo para usuarios del sistema (is_system=True)
+    if user is None:
+        user = await db.scalar(
+            select(PGUser).where(
+                PGUser.username == ident,
+                PGUser.is_system.is_(True),
+            )
+        )
 
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(

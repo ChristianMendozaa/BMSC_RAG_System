@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import uuid
 from typing import Literal
 
@@ -5,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cache import response_cache
 from app.core.dependencies import require_permission
 from app.db.models.collection import Collection
 from app.db.models.collection_permission import CollectionPermission
@@ -20,6 +23,8 @@ from app.db.schemas.permission import AccessibleCollectionOut, AccessibleDocumen
 from app.db.session import get_pg_db
 from app.dependencies import get_current_user
 from app.services import hard_delete
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/collections", tags=["collections"])
 
@@ -282,12 +287,23 @@ async def delete_collection(
         docs_result = await db.execute(
             select(PGDocument).where(PGDocument.collection_id == collection_id)
         )
-        for doc in docs_result.scalars():
+        obsoleted_docs = docs_result.scalars().all()
+        for doc in obsoleted_docs:
             doc.status = "OBSOLETE"
             doc.collection_id = None
         await db.flush()
         await db.delete(col)
         await db.commit()
+
+        # Invalidar caché de respuestas para cada documento obsoletizado
+        for doc in obsoleted_docs:
+            n = await asyncio.to_thread(response_cache.invalidate_by_doc_id, str(doc.id))
+            if n:
+                logger.info(
+                    "Colección obsolete col=%s, doc=%s: invalidadas %d respuestas cacheadas",
+                    collection_id, doc.id, n,
+                )
+
         return {"deleted": True, "has_documents": True, "document_count": doc_count, "obsoleted": doc_count}
 
     # action == "delete"

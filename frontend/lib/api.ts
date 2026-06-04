@@ -33,6 +33,7 @@ export interface RoleInfo {
 export interface UserInfo {
   id: string;
   username: string;
+  email: string | null;
   is_active: boolean;
   role: RoleInfo | null;
 }
@@ -46,6 +47,7 @@ export interface LoginResponse {
 export interface UserOut {
   id: string;
   username: string;
+  email: string | null;
   is_active: boolean;
   is_system: boolean;
   role_id: string | null;
@@ -91,11 +93,11 @@ async function handleResponse<T>(res: Response): Promise<T> {
 
 // ── Auth ───────────────────────────────────────────────────────────────────
 
-export async function login(username: string, password: string): Promise<LoginResponse> {
+export async function login(identifier: string, password: string): Promise<LoginResponse> {
   const res = await fetch(`${API_URL}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ identifier, password }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: '' }));
@@ -138,7 +140,7 @@ export async function getUsers(skip = 0, limit = 50): Promise<UsersListResponse>
 }
 
 export async function createUser(data: {
-  username: string;
+  email: string;
   password: string;
   role_id: string;
   is_active?: boolean;
@@ -197,11 +199,11 @@ export async function assignUserRole(id: string, roleId: string | null): Promise
   return handleResponse<UserOut>(res);
 }
 
-export async function renameUser(id: string, username: string): Promise<UserOut> {
-  const res = await fetch(`${API_URL}/api/users/${id}/username`, {
+export async function changeUserEmail(id: string, email: string): Promise<UserOut> {
+  const res = await fetch(`${API_URL}/api/users/${id}/email`, {
     method: 'PATCH',
     headers: getAuthHeaders(),
-    body: JSON.stringify({ username }),
+    body: JSON.stringify({ email }),
   });
   return handleResponse<UserOut>(res);
 }
@@ -712,6 +714,15 @@ export async function deleteChatSession(id: string): Promise<void> {
   return handleResponse<void>(res);
 }
 
+export async function renameChatSession(id: string, title: string): Promise<ChatSessionListItem> {
+  const res = await fetch(`${API_URL}/api/conversations/${id}`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ title }),
+  });
+  return handleResponse<ChatSessionListItem>(res);
+}
+
 /** @deprecated Use getChatSession instead */
 export async function getConversationHistory(sessionId: string): Promise<Message[]> {
   const detail = await getChatSession(sessionId);
@@ -725,36 +736,20 @@ export async function getConversationHistory(sessionId: string): Promise<Message
 
 // ── Chat (SSE via fetch) ────────────────────────────────────────────────────
 
-export async function streamChat(
-  request: ChatRequest,
-  onToken: (token: string) => void,
-  onDone: (sessionId: string, sources: Source[]) => void,
-  onError: (err: Error) => void,
+export interface ChatStreamHandlers {
+  onSession?: (sessionId: string) => void;
+  onToken: (token: string) => void;
+  onDone: (sessionId: string, sources: Source[], opts?: { stopped?: boolean }) => void;
+  onError: (err: Error) => void;
+  signal?: AbortSignal;
+}
+
+async function _consumeSSE(
+  body: ReadableStream<Uint8Array>,
+  handlers: ChatStreamHandlers,
 ): Promise<void> {
-  let response: Response;
-  try {
-    response = await fetch(`${API_URL}/api/chat`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(request),
-    });
-  } catch (err) {
-    onError(err instanceof Error ? err : new Error(String(err)));
-    return;
-  }
-
-  if (!response.ok) {
-    if (response.status === 401) handle401();
-    onError(new Error(`Chat request failed: ${response.status}`));
-    return;
-  }
-
-  if (!response.body) {
-    onError(new Error('No response body for SSE stream'));
-    return;
-  }
-
-  const reader = response.body.getReader();
+  const { onSession, onToken, onDone, onError } = handlers;
+  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
 
@@ -780,12 +775,17 @@ export async function streamChat(
             session_id?: string;
             sources?: Source[];
             message?: string;
+            from_cache?: boolean;
           };
 
-          if (payload.type === 'token' && payload.content) {
+          if (payload.type === 'session' && payload.session_id) {
+            onSession?.(payload.session_id);
+          } else if (payload.type === 'token' && payload.content) {
             onToken(payload.content);
           } else if (payload.type === 'done') {
             onDone(payload.session_id ?? '', payload.sources ?? []);
+          } else if (payload.type === 'stopped') {
+            onDone(payload.session_id ?? '', payload.sources ?? [], { stopped: true });
           } else if (payload.type === 'error') {
             onError(new Error(payload.message ?? 'Unknown stream error'));
           }
@@ -795,8 +795,87 @@ export async function streamChat(
       }
     }
   } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') return;
     onError(err instanceof Error ? err : new Error(String(err)));
   } finally {
     reader.releaseLock();
   }
+}
+
+export async function streamChat(
+  request: ChatRequest,
+  handlers: ChatStreamHandlers,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/api/chat`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(request),
+      signal: handlers.signal,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') return;
+    handlers.onError(err instanceof Error ? err : new Error(String(err)));
+    return;
+  }
+
+  if (!response.ok) {
+    if (response.status === 401) handle401();
+    handlers.onError(new Error(`Chat request failed: ${response.status}`));
+    return;
+  }
+
+  if (!response.body) {
+    handlers.onError(new Error('No response body for SSE stream'));
+    return;
+  }
+
+  await _consumeSSE(response.body, handlers);
+}
+
+export async function stopChat(sessionId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/chat/${sessionId}/stop`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Stop failed: ${res.status}`);
+  }
+}
+
+export async function getActiveGeneration(
+  sessionId: string,
+): Promise<{ active: boolean; status: string; text: string }> {
+  const res = await fetch(`${API_URL}/api/chat/${sessionId}/active`, {
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<{ active: boolean; status: string; text: string }>(res);
+}
+
+export async function resumeStream(
+  sessionId: string,
+  handlers: ChatStreamHandlers,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/api/chat/${sessionId}/stream`, {
+      headers: getAuthHeaders(),
+      signal: handlers.signal,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') return;
+    handlers.onError(err instanceof Error ? err : new Error(String(err)));
+    return;
+  }
+
+  if (!response.ok) {
+    if (response.status === 401) handle401();
+    // 404 means generation already finished — not an error for the caller
+    return;
+  }
+
+  if (!response.body) return;
+
+  await _consumeSSE(response.body, handlers);
 }

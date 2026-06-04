@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 
 class LoginRequest(BaseModel):
-    username: str
+    identifier: str  # correo para usuarios normales; username para el admin del sistema (is_system=True)
     password: str
 
 
@@ -24,6 +24,7 @@ class RoleInfo(BaseModel):
 class UserInfo(BaseModel):
     id: uuid.UUID
     username: str
+    email: str | None = None
     is_active: bool
     role: RoleInfo
 

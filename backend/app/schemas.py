@@ -129,6 +129,18 @@ class ChatMessageOut(BaseModel):
         return str(v)
 
 
+class ChatSessionUpdate(BaseModel):
+    title: str
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def validate_title(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("El título no puede estar vacío")
+        return v[:200]
+
+
 class ChatSessionListItem(BaseModel):
     id: str
     title: str

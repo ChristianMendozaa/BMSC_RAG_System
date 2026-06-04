@@ -11,7 +11,7 @@ from app.db.models.document import PGDocument
 from app.db.models.user import PGUser
 from app.db.session import get_pg_db
 from app.dependencies import get_current_user
-from app.schemas import BlockerItem, ChatMessageOut, ChatSessionDetail, ChatSessionListItem, ResumeCheckOut
+from app.schemas import BlockerItem, ChatMessageOut, ChatSessionDetail, ChatSessionListItem, ChatSessionUpdate, ResumeCheckOut
 from app.services.chat_access import check_collection_access, check_doc_access
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
@@ -138,6 +138,28 @@ async def resume_check(
         blockers=blockers,
         collection_id=str(session.collection_id) if session.collection_id else None,
         document_ids=[str(d) for d in (session.document_ids or [])],
+    )
+
+
+@router.patch("/{session_id}", response_model=ChatSessionListItem)
+async def rename_conversation(
+    session_id: uuid.UUID,
+    body: ChatSessionUpdate,
+    current_user: PGUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_pg_db),
+):
+    """Cambia el título de una conversación."""
+    session = await _get_session_or_404(session_id, current_user.id, db)
+    session.title = body.title
+    await db.commit()
+    await db.refresh(session)
+    return ChatSessionListItem(
+        id=session.id,
+        title=session.title,
+        collection_id=session.collection_id,
+        document_ids=session.document_ids,
+        updated_at=session.updated_at,
+        document_count=len(session.document_ids or []),
     )
 
 

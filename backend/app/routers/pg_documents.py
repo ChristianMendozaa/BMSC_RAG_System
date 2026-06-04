@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import mimetypes
 import uuid
 from datetime import datetime, timezone
@@ -10,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.cache import response_cache
 from app.config import settings
 from app.db.models.collection import Collection
 from app.db.models.document import PGDocument
@@ -20,6 +23,8 @@ from app.db.session import get_pg_db
 from app.dependencies import get_current_user
 from app.services import file_storage, hard_delete
 from app.services.ingest_pipeline import ACCEPTED_EXTENSIONS, run_pipeline
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["pg-documents"])
 
@@ -304,6 +309,10 @@ async def delete_pg_document(
 
     pg_doc.status = "OBSOLETE"
     await pg_db.commit()
+
+    n = await asyncio.to_thread(response_cache.invalidate_by_doc_id, str(doc_id))
+    if n:
+        logger.info("Soft-delete doc=%s: invalidadas %d respuestas cacheadas", doc_id, n)
 
 
 @router.patch("/pg-documents/{doc_id}", response_model=PgDocumentOut)

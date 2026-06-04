@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import math
+import threading
 import time
 import uuid
 from typing import AsyncGenerator
@@ -42,7 +44,9 @@ Directrices:
 - Cita la fuente entre paréntesis cuando sea relevante (nombre del documento y página),
   p. ej. (Manual de operaciones, pág. 4).
 - El contexto puede incluir fragmentos de texto y descripciones textuales de figuras, tablas o
-  diagramas extraídas de los documentos. Trátalas como información válida del documento."""
+  diagramas extraídas de los documentos. Trátalas como información válida del documento.
+- Cuando el contexto incluya fragmentos de MÚLTIPLES documentos, tu respuesta debe abarcar
+  TODOS los documentos presentes en el contexto. No respondas solo sobre uno si hay varios."""
 
 SYSTEM_PROMPT = _SYSTEM_PROMPT_BASE
 
@@ -99,6 +103,43 @@ async def _fetch_image_descriptions(
     return candidates
 
 
+def _select_diverse(items: list[dict], k: int, multi: bool) -> list[dict]:
+    """Selecciona k items del pool ya ordenado por rerank_score.
+
+    - multi=False → top-k simple (comportamiento original).
+    - multi=True  → round-robin por doc_id: cada documento recibe al menos un slot
+      antes de que cualquiera reciba el segundo. El orden de turno de los documentos
+      se fija por el mejor score de cada uno (el pool ya viene ordenado).
+    """
+    if not multi:
+        return items[:k]
+
+    # Agrupar preservando el orden de llegada (ya ordenado por score desc)
+    buckets: dict[str, list[dict]] = {}
+    for item in items:
+        did = item.get("doc_id", "")
+        if did not in buckets:
+            buckets[did] = []
+        buckets[did].append(item)
+
+    # Orden de turno: el primer elemento de cada bucket ya es el mejor de ese doc
+    doc_order = list(buckets.keys())
+
+    selected: list[dict] = []
+    while len(selected) < k:
+        added_this_round = False
+        for did in doc_order:
+            if not buckets[did]:
+                continue
+            selected.append(buckets[did].pop(0))
+            added_this_round = True
+            if len(selected) == k:
+                break
+        if not added_this_round:
+            break  # pool agotado
+    return selected
+
+
 async def build_context(
     message: str,
     document_ids: list[str] | None,
@@ -120,15 +161,27 @@ async def build_context(
     query_vector = await embedder.embed_text(search_query)
     _perf_log("embedding(BGE-M3): %.3fs", time.perf_counter() - t0)
 
+    num_docs = len(document_ids) if document_ids else 0
+    multi = num_docs > 1
+
     t0 = time.perf_counter()
-    chroma_hits = await vector_store.search(
-        query_vector=query_vector,
-        top_k=settings.retrieval_top_k,
-        doc_ids=document_ids,
-    )
+    if multi and num_docs <= settings.retrieval_balanced_max_docs:
+        # Recuperación equilibrada: cada documento aporta sus mejores fragmentos al pool.
+        per_doc_k = max(2, math.ceil(settings.retrieval_top_k / num_docs))
+        results = await asyncio.gather(*[
+            vector_store.search(query_vector=query_vector, top_k=per_doc_k, doc_ids=[d])
+            for d in document_ids
+        ])
+        chroma_hits = [h for r in results for h in r]
+    else:
+        chroma_hits = await vector_store.search(
+            query_vector=query_vector,
+            top_k=settings.retrieval_top_k,
+            doc_ids=document_ids,
+        )
     _perf_log(
-        "chroma-search: %.3fs (%d hits)",
-        time.perf_counter() - t0, len(chroma_hits),
+        "chroma-search: %.3fs (%d hits, multi=%s)",
+        time.perf_counter() - t0, len(chroma_hits), multi,
     )
 
     text_candidates: list[dict] = []
@@ -164,11 +217,21 @@ async def build_context(
         )
         return [], []
 
+    # Presupuesto efectivo: escala con el número de documentos en multi-doc
+    effective_top_k = settings.rerank_top_k
+    if multi:
+        effective_top_k = min(
+            settings.rerank_top_k + (num_docs - 1),
+            settings.rerank_top_k_max,
+        )
+
     t0 = time.perf_counter()
-    reranked = await reranker_svc.rerank(message, pool, top_k=settings.rerank_top_k)
+    # Rerankear TODO el pool para obtener scores completos; la selección diversa recorta después
+    reranked_all = await reranker_svc.rerank(message, pool, top_k=len(pool))
+    reranked = _select_diverse(reranked_all, effective_top_k, multi)
     _perf_log(
-        "rerank(BGE-ce): %.3fs (%d->%d)",
-        time.perf_counter() - t0, len(pool), len(reranked),
+        "rerank(BGE-ce): %.3fs (%d->%d, budget=%d)",
+        time.perf_counter() - t0, len(pool), len(reranked), effective_top_k,
     )
 
     text_contexts = [c for c in reranked if c["type"] == "text"]
@@ -254,7 +317,16 @@ def _build_messages(
         label = "Usuario" if turn["role"] == "user" else "Asistente"
         history_text += f"{label}: {_truncate(turn['content'], _MAX_HISTORY_TURN_CHARS)}\n"
 
+    # Cabecera explícita de documentos en scope (solo en multi-doc) para que el LLM
+    # sepa cuántos documentos hay y los mencione todos en respuestas de conjunto.
+    doc_names = list(dict.fromkeys(
+        c["filename"] for c in text_contexts + image_sources if c.get("filename")
+    ))
+
     user_content = ""
+    if len(doc_names) > 1:
+        names_str = ", ".join(doc_names)
+        user_content += f"DOCUMENTOS EN CONSULTA ({len(doc_names)}): {names_str}\n\n"
     if context_block:
         user_content += f"CONTEXTO DE DOCUMENTOS:\n{context_block}\n\n"
     if history_text:
@@ -275,6 +347,7 @@ async def stream_chat(
     text_contexts: list[dict],
     image_sources: list[dict],
     history: list[dict],
+    cancel_flag: threading.Event | None = None,
 ) -> AsyncGenerator[tuple[str, list[Source] | None], None]:
     messages = _build_messages(message, text_contexts, image_sources, history)
     sources = _build_sources(text_contexts, image_sources)
@@ -300,6 +373,8 @@ async def stream_chat(
                 repeat_penalty=settings.chat_repeat_penalty,
             )
             for chunk in stream:
+                if cancel_flag is not None and cancel_flag.is_set():
+                    break
                 content: str = chunk["choices"][0]["delta"].get("content") or ""
                 if not content:
                     continue

@@ -1,17 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
-  streamChat,
   getAccessibleCollections,
   getChatSession,
   listChatSessions,
   resumeCheckSession,
   deleteChatSession,
+  renameChatSession,
   getDocumentDownloadUrl,
   API_URL,
 } from '@/lib/api';
+import { useChatStream } from '@/lib/chat-stream-context';
 import type { AccessibleCollectionOut, BlockerItem, ChatSessionListItem } from '@/lib/api';
 import type { Message } from '@/types';
 import ChatWindow from '@/components/chat/ChatWindow';
@@ -30,6 +31,7 @@ import {
   ExternalLink,
   Download,
   Loader2,
+  Pencil,
 } from 'lucide-react';
 
 // ── Sidebar ────────────────────────────────────────────────────────────────
@@ -50,6 +52,7 @@ interface SidebarProps {
   activeSessionId: string | null;
   onResumeSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
+  onRenameSession: (id: string) => void;
 }
 
 function SidebarContent({
@@ -67,6 +70,7 @@ function SidebarContent({
   activeSessionId,
   onResumeSession,
   onDeleteSession,
+  onRenameSession,
 }: SidebarProps) {
   const [downloadingCollId, setDownloadingCollId] = useState<string | null>(null);
 
@@ -118,7 +122,7 @@ function SidebarContent({
       </div>
 
       {/* Scope activo */}
-      {activeCollectionId && (
+      {activeCollectionId && activeCol && activeCol.documents.length > 0 && (
         <div
           className="mx-3 mt-2 px-3 py-2 rounded-lg text-xs"
           style={{ background: 'var(--gold-subtle)', border: '1px solid var(--border-gold)' }}
@@ -266,6 +270,7 @@ function SidebarContent({
         activeSessionId={activeSessionId}
         onResume={onResumeSession}
         onDelete={onDeleteSession}
+        onRename={onRenameSession}
         loading={sessionsLoading}
       />
 
@@ -302,9 +307,12 @@ function SidebarContent({
 // ── Chat page ──────────────────────────────────────────────────────────────
 
 export default function ChatPage() {
+  const chatStream = useChatStream();
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
-  const [isStreaming, setIsStreaming] = useState(false);
+  // Key used to track the in-progress generation (temp key or real session_id)
+  const [streamKey, setStreamKey] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
 
@@ -328,8 +336,15 @@ export default function ChatPage() {
     open: false,
     sessionId: null,
   });
+  const [renameModal, setRenameModal] = useState<{ open: boolean; sessionId: string | null; currentTitle: string }>({
+    open: false,
+    sessionId: null,
+    currentTitle: '',
+  });
 
-  const hasScope = activeCollectionId !== null;
+  const activeCol = collections.find((c) => c.id === activeCollectionId) ?? null;
+  const hasScope = activeCol !== null && activeCol.documents.length > 0;
+  const isEmptyCollectionSelected = activeCollectionId !== null && (activeCol === null || activeCol.documents.length === 0);
 
   // Load collections
   useEffect(() => {
@@ -357,6 +372,7 @@ export default function ChatPage() {
   const handleNewConversation = useCallback(() => {
     setMessages([]);
     setSessionId(null);
+    setStreamKey(null);
     setInputValue('');
     setActiveCollectionId(null);
     setSelectedDocIds(new Set());
@@ -384,6 +400,7 @@ export default function ChatPage() {
         }));
         setMessages(msgs);
         setSessionId(id);
+        setStreamKey(id);
 
         // Re-fetch collections to ensure fresh state, then restore selection
         const freshCols = await getAccessibleCollections();
@@ -407,11 +424,14 @@ export default function ChatPage() {
           detail.document_ids.filter((did) => accessibleDocIds.has(did)),
         );
         setSelectedDocIds(restored);
+
+        // Attach to any still-running background generation
+        await chatStream.attachIfActive(id);
       } catch (err) {
         console.error('Error al reanudar sesión:', err);
       }
     },
-    [],
+    [chatStream],
   );
 
   // Delete a session
@@ -431,6 +451,22 @@ export default function ChatPage() {
       console.error('Error al eliminar sesión:', err);
     }
   }, [deleteModal.sessionId, sessionId, handleNewConversation]);
+
+  // Rename session
+  const handleRenameSession = useCallback((id: string) => {
+    const session = sessions.find((s) => s.id === id);
+    setRenameModal({ open: true, sessionId: id, currentTitle: session?.title ?? '' });
+  }, [sessions]);
+
+  const confirmRenameSession = useCallback(async (newTitle: string) => {
+    if (!renameModal.sessionId || !newTitle.trim()) return;
+    try {
+      const updated = await renameChatSession(renameModal.sessionId, newTitle.trim());
+      setSessions((prev) => prev.map((s) => s.id === updated.id ? { ...s, title: updated.title } : s));
+    } catch (err) {
+      console.error('Error al renombrar sesión:', err);
+    }
+  }, [renameModal.sessionId]);
 
   const handleSelectCollection = useCallback((colId: string) => {
     setActiveCollectionId(colId);
@@ -460,68 +496,64 @@ export default function ChatPage() {
     });
   }, []);
 
+  // Current stream entry for this session
+  const activeKey = streamKey ?? sessionId;
+  const currentStream = activeKey ? chatStream.getStream(activeKey) : undefined;
+  const isStreaming = currentStream?.status === 'streaming';
+
+  // Fold a completed stream back into the messages array
+  const chatStreamRef = useRef(chatStream);
+  chatStreamRef.current = chatStream;
+
+  useEffect(() => {
+    if (!activeKey) return;
+    if (!currentStream) return;
+    if (currentStream.status !== 'done' && currentStream.status !== 'stopped') return;
+
+    const finalMsg: Message = {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: currentStream.content,
+      sources: currentStream.sources,
+      isStreaming: false,
+    };
+    setMessages((prev) => {
+      const withoutPlaceholder = prev.filter((m) => !(m.role === 'assistant' && m.isStreaming));
+      return [...withoutPlaceholder, finalMsg];
+    });
+    chatStreamRef.current.clearStream(activeKey);
+    setStreamKey(null);
+    listChatSessions().then(setSessions).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeKey, currentStream?.status]);
+
   const handleSubmit = useCallback(
-    async (text: string) => {
+    (text: string) => {
       if (isStreaming || !hasScope) return;
 
       const userMsg: Message = { id: crypto.randomUUID(), role: 'user', content: text, sources: [] };
-      const assistantMsgId = crypto.randomUUID();
-      const assistantMsg: Message = {
-        id: assistantMsgId,
-        role: 'assistant',
-        content: '',
-        sources: [],
-        isStreaming: true,
-      };
-
-      setMessages((prev) => [...prev, userMsg, assistantMsg]);
+      setMessages((prev) => [...prev, userMsg]);
       setInputValue('');
-      setIsStreaming(true);
 
-      await streamChat(
+      const key = chatStream.startStream(
         {
           message: text,
           session_id: sessionId,
           collection_id: activeCollectionId,
           document_ids: selectedDocIds.size > 0 ? Array.from(selectedDocIds) : null,
         },
-        (token) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMsgId ? { ...m, content: m.content + token } : m,
-            ),
-          );
-        },
-        (newSessionId, sources) => {
-          // First message: server returned a new session_id
-          if (!sessionId && newSessionId) {
-            setSessionId(newSessionId);
-            // Refresh history list so the new session appears
+        {
+          onNewSession: (realId) => {
+            setSessionId(realId);
+            setStreamKey(realId);
             listChatSessions().then(setSessions).catch(() => {});
-          } else {
-            // Subsequent message: refresh to update updated_at ordering
-            listChatSessions().then(setSessions).catch(() => {});
-          }
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMsgId ? { ...m, sources, isStreaming: false } : m,
-            ),
-          );
-          setIsStreaming(false);
-        },
-        (err) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMsgId
-                ? { ...m, content: `Lo sentimos, ocurrió un error: ${err.message}`, isStreaming: false }
-                : m,
-            ),
-          );
-          setIsStreaming(false);
+          },
         },
       );
+      // If we already have a session_id, the key equals it; otherwise use temp key
+      setStreamKey(sessionId ?? key);
     },
-    [isStreaming, hasScope, sessionId, activeCollectionId, selectedDocIds],
+    [isStreaming, hasScope, sessionId, activeCollectionId, selectedDocIds, chatStream],
   );
 
   const sidebarProps: SidebarProps = {
@@ -539,9 +571,8 @@ export default function ChatPage() {
     activeSessionId: sessionId,
     onResumeSession: handleResumeSession,
     onDeleteSession: handleDeleteSession,
+    onRenameSession: handleRenameSession,
   };
-
-  const activeCol = collections.find((c) => c.id === activeCollectionId);
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -654,7 +685,26 @@ export default function ChatPage() {
               </p>
             </div>
           )}
-          {(hasScope || messages.length > 0) && <ChatWindow messages={messages} />}
+          {(hasScope || messages.length > 0) && (
+            <ChatWindow
+              messages={
+                currentStream && currentStream.status === 'streaming'
+                  ? [
+                      ...messages,
+                      {
+                        id: '__streaming__',
+                        role: 'assistant' as const,
+                        content: currentStream.content,
+                        sources: [],
+                        isStreaming: true,
+                      },
+                    ]
+                  : messages
+              }
+              title={sessionId ? (sessions.find((s) => s.id === sessionId)?.title ?? null) : null}
+              onRename={sessionId ? () => handleRenameSession(sessionId) : undefined}
+            />
+          )}
         </div>
 
         {/* Input */}
@@ -669,7 +719,7 @@ export default function ChatPage() {
               boxShadow: '0 -4px 32px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.3)',
             }}
           >
-            {!hasScope && (
+            {!activeCollectionId && (
               <div
                 className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-lg text-xs"
                 style={{
@@ -680,6 +730,19 @@ export default function ChatPage() {
               >
                 <AlertCircle size={12} />
                 Selecciona una colección en el panel izquierdo para habilitar el chat
+              </div>
+            )}
+            {isEmptyCollectionSelected && (
+              <div
+                className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-lg text-xs"
+                style={{
+                  background: 'rgba(212, 168, 67, 0.06)',
+                  border: '1px solid var(--border-gold)',
+                  color: 'var(--gold-muted)',
+                }}
+              >
+                <AlertCircle size={12} />
+                La colección seleccionada no tiene documentos disponibles
               </div>
             )}
             {hasScope && (
@@ -693,6 +756,7 @@ export default function ChatPage() {
               value={inputValue}
               onChange={setInputValue}
               onSubmit={handleSubmit}
+              onStop={sessionId ? () => chatStream.stopStream(sessionId) : undefined}
               isStreaming={isStreaming}
               disabled={!hasScope}
             />
@@ -718,6 +782,187 @@ export default function ChatPage() {
         destructive
         onConfirm={confirmDeleteSession}
       />
+
+      {/* Rename modal */}
+      <RenameChatModal
+        open={renameModal.open}
+        currentTitle={renameModal.currentTitle}
+        onOpenChange={(open) => setRenameModal((prev) => ({ ...prev, open }))}
+        onConfirm={confirmRenameSession}
+      />
     </div>
+  );
+}
+
+// ── RenameChatModal ────────────────────────────────────────────────────────
+
+function RenameChatModal({
+  open,
+  currentTitle,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean;
+  currentTitle: string;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (title: string) => Promise<void>;
+}) {
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  // Reset field whenever modal opens
+  useEffect(() => {
+    if (open) setValue(currentTitle);
+  }, [open, currentTitle]);
+
+  const trimmed = value.trim();
+  const valid = trimmed.length >= 1 && trimmed !== currentTitle;
+
+  const handleSave = async () => {
+    if (!valid || busy) return;
+    setBusy(true);
+    try {
+      await onConfirm(trimmed);
+      onOpenChange(false);
+    } catch {
+      // error already logged by caller
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog.Root open={open} onOpenChange={(o) => { if (!busy) onOpenChange(o); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay
+          style={{
+            position: 'fixed', inset: 0, zIndex: 50,
+            background: 'rgba(0,0,0,0.65)',
+            backdropFilter: 'blur(3px)',
+            WebkitBackdropFilter: 'blur(3px)',
+          }}
+        />
+        <Dialog.Content
+          style={{
+            position: 'fixed', zIndex: 51,
+            top: '50%', left: '50%',
+            transform: 'translate(-50%, -50%)',
+            width: '100%', maxWidth: '380px',
+            padding: '24px',
+            borderRadius: '16px',
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border-default)',
+            boxShadow: '0 24px 64px rgba(0,0,0,0.55)',
+          }}
+        >
+          <Dialog.Close asChild>
+            <button
+              style={{
+                position: 'absolute', top: '14px', right: '14px',
+                padding: '4px', borderRadius: '6px',
+                border: 'none', background: 'transparent',
+                cursor: 'pointer', color: 'var(--text-muted)',
+                display: 'flex', alignItems: 'center',
+              }}
+            >
+              <X size={14} />
+            </button>
+          </Dialog.Close>
+
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '16px' }}>
+            <div
+              style={{
+                flexShrink: 0, width: '38px', height: '38px',
+                borderRadius: '10px', display: 'flex',
+                alignItems: 'center', justifyContent: 'center',
+                background: 'rgba(212,168,67,0.12)',
+                border: '1px solid rgba(212,168,67,0.25)',
+              }}
+            >
+              <Pencil size={16} style={{ color: 'var(--gold-bright)' }} />
+            </div>
+            <div style={{ flex: 1, paddingTop: '2px' }}>
+              <Dialog.Title
+                style={{
+                  margin: '0 0 4px',
+                  fontSize: '15px', fontWeight: 600,
+                  fontFamily: 'Playfair Display, serif',
+                  color: 'var(--text-primary)', lineHeight: 1.3,
+                }}
+              >
+                Renombrar conversación
+              </Dialog.Title>
+              <Dialog.Description
+                style={{
+                  margin: 0, fontSize: '12px',
+                  color: 'var(--text-muted)',
+                  fontFamily: 'DM Sans, sans-serif', lineHeight: 1.45,
+                }}
+              >
+                Escribe el nuevo nombre para esta conversación.
+              </Dialog.Description>
+            </div>
+          </div>
+
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
+            autoFocus
+            maxLength={200}
+            style={{
+              width: '100%', padding: '8px 12px',
+              borderRadius: '8px',
+              border: '1px solid var(--border-default)',
+              background: 'var(--bg-surface)',
+              color: 'var(--text-primary)',
+              fontSize: '13px',
+              fontFamily: 'DM Sans, sans-serif',
+              outline: 'none',
+              marginBottom: '16px',
+              boxSizing: 'border-box',
+            }}
+          />
+
+          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+            <Dialog.Close asChild>
+              <button
+                disabled={busy}
+                style={{
+                  padding: '8px 16px', borderRadius: '8px',
+                  fontSize: '12px', fontWeight: 500,
+                  fontFamily: 'DM Sans, sans-serif',
+                  cursor: 'pointer',
+                  background: 'var(--bg-surface)',
+                  border: '1px solid var(--border-default)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                Cancelar
+              </button>
+            </Dialog.Close>
+            <button
+              onClick={handleSave}
+              disabled={!valid || busy}
+              style={{
+                padding: '8px 16px', borderRadius: '8px',
+                fontSize: '12px', fontWeight: 600,
+                fontFamily: 'DM Sans, sans-serif',
+                cursor: valid && !busy ? 'pointer' : 'not-allowed',
+                background: 'var(--gold-bright)',
+                border: 'none',
+                color: '#0A1A10',
+                opacity: valid && !busy ? 1 : 0.5,
+                display: 'flex', alignItems: 'center', gap: '6px',
+              }}
+            >
+              {busy && <Loader2 size={12} style={{ animation: 'spin 0.8s linear infinite' }} />}
+              Guardar
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

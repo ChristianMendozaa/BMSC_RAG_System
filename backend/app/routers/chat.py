@@ -1,17 +1,14 @@
 import asyncio
 import json
 import logging
-import time
 import uuid
-from datetime import datetime, timezone
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import and_, select, update
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app.db.models.chat_message import ChatMessage
 from app.db.models.chat_session import ChatSession
 from app.db.models.collection_permission import CollectionPermission
 from app.db.models.document import PGDocument
@@ -21,21 +18,13 @@ from app.db.models.role_document_permission import RoleDocumentPermission
 from app.db.models.user import PGUser
 from app.db.models.user_collection_permission import UserCollectionPermission
 from app.db.models.user_document_permission import UserDocumentPermission
-from app.db.session import PGAsyncSessionLocal as AsyncSessionLocal, get_pg_db
-from app.config import settings
+from app.db.session import get_pg_db
 from app.dependencies import get_current_user
 from app.schemas import ChatRequest
-from app.cache import response_cache
-from app.services import rag
+from app.services import chat_runner
 from app.services.chat_access import check_collection_access, check_doc_access
 
 logger = logging.getLogger(__name__)
-
-
-def _perf_log(msg: str, *args) -> None:
-    if settings.chat_perf_logging:
-        logger.info("[chat-perf] " + msg, *args)
-
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -47,11 +36,6 @@ async def _resolve_allowed_docs(
     request: ChatRequest,
     db: AsyncSession,
 ) -> list[str]:
-    """
-    Expands the user's collection/document selection into a validated list of
-    doc_id strings for the first message of a new session.
-    Always returns a list (never None).
-    """
     is_admin = user.role.can_manage_collections
 
     udp_map: dict[uuid.UUID, bool] = {}
@@ -145,37 +129,28 @@ async def _resolve_allowed_docs(
     return []
 
 
-# ── Session persistence helpers ────────────────────────────────────────────────
+# ── Subscriber SSE helper ──────────────────────────────────────────────────────
 
-async def _get_history(session_id: str) -> list[dict]:
-    async with AsyncSessionLocal() as db_session:
-        result = await db_session.execute(
-            select(ChatMessage)
-            .where(ChatMessage.session_id == uuid.UUID(session_id))
-            .order_by(ChatMessage.created_at.asc())
-        )
-        rows = result.scalars().all()
-        return [{"role": r.role, "content": r.content} for r in rows]
+def _make_subscriber_generator(
+    gen: chat_runner.ActiveGeneration,
+    session_id: str,
+) -> AsyncGenerator[dict, None]:
+    async def _generator() -> AsyncGenerator[dict, None]:
+        q = await chat_runner.subscribe(gen)
+        try:
+            yield {"data": json.dumps({"type": "session", "session_id": session_id})}
+            while True:
+                item = await q.get()
+                if item is None:
+                    break
+                yield {"data": item}
+                payload = json.loads(item)
+                if payload.get("type") in ("done", "stopped", "error"):
+                    break
+        finally:
+            chat_runner.unsubscribe(gen, q)
 
-
-async def _save_turn(
-    session_id: str, role: str, content: str, sources_json: str | None = None
-) -> None:
-    now = datetime.now(timezone.utc)
-    async with AsyncSessionLocal() as db_session:
-        msg = ChatMessage(
-            session_id=uuid.UUID(session_id),
-            role=role,
-            content=content,
-            sources_json=sources_json,
-        )
-        db_session.add(msg)
-        await db_session.execute(
-            update(ChatSession)
-            .where(ChatSession.id == uuid.UUID(session_id))
-            .values(updated_at=now)
-        )
-        await db_session.commit()
+    return _generator()
 
 
 # ── Chat endpoint ──────────────────────────────────────────────────────────────
@@ -189,7 +164,6 @@ async def chat(
     session_id: str
 
     if request.session_id is not None:
-        # --- Existing session: validate ownership and re-check all docs ---
         try:
             sid = uuid.UUID(request.session_id)
         except ValueError:
@@ -227,13 +201,12 @@ async def chat(
                     detail={"code": "session_invalid", "blockers": [{"reason": col_blocker}]},
                 )
 
-        allowed_doc_ids: list[str] | None = (
-            [str(d) for d in session.document_ids] if session.document_ids else None
+        allowed_doc_ids: list[str] = (
+            [str(d) for d in session.document_ids] if session.document_ids else []
         )
         session_id = str(session.id)
 
     else:
-        # --- New session: resolve scope and create session row ---
         allowed_doc_ids = await _resolve_allowed_docs(current_user, request, db)
 
         if len(allowed_doc_ids) == 0:
@@ -254,95 +227,96 @@ async def chat(
         await db.refresh(session)
         session_id = str(session.id)
 
-    async def event_generator() -> AsyncGenerator[dict, None]:
-        try:
-            t_total = time.perf_counter()
+    if chat_runner.is_running(session_id):
+        raise HTTPException(status_code=409, detail="Ya hay una generación en curso para esta sesión")
 
-            t0 = time.perf_counter()
-            history = await _get_history(session_id)
-            _perf_log("history(db): %.3fs", time.perf_counter() - t0)
+    gen = chat_runner.start(session_id, request.message, allowed_doc_ids)
+    return EventSourceResponse(_make_subscriber_generator(gen, session_id))
 
-            t0 = time.perf_counter()
-            await _save_turn(session_id, "user", request.message)
-            _perf_log("save-user(db): %.3fs", time.perf_counter() - t0)
 
-            t0 = time.perf_counter()
-            cached = await asyncio.to_thread(response_cache.get, request.message)
-            _perf_log(
-                "cache lookup: %.3fs (%s)",
-                time.perf_counter() - t0, "HIT" if cached is not None else "MISS",
-            )
-            if cached is not None:
-                cached_text, cached_sources = cached
-                await _save_turn(
-                    session_id, "assistant", cached_text, json.dumps(cached_sources)
-                )
-                _perf_log(
-                    "TOTAL chat (cache hit): %.3fs",
-                    time.perf_counter() - t_total,
-                )
-                yield {"data": json.dumps({"type": "token", "content": cached_text})}
-                yield {
-                    "data": json.dumps({
-                        "type": "done",
-                        "session_id": session_id,
-                        "sources": cached_sources,
-                        "from_cache": True,
-                    })
-                }
-                return
+# ── Stop endpoint ──────────────────────────────────────────────────────────────
 
-            text_contexts, image_sources = await rag.build_context(
-                request.message,
-                allowed_doc_ids,
-                history=history,
-            )
+@router.post("/chat/{session_id}/stop")
+async def stop_generation(
+    session_id: str,
+    current_user: PGUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_pg_db),
+):
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="session_id inválido")
 
-            full_response = ""
-            final_sources = None
+    sess_res = await db.execute(
+        select(ChatSession).where(
+            ChatSession.id == sid,
+            ChatSession.user_id == current_user.id,
+        )
+    )
+    if sess_res.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
-            async for token, sources in rag.stream_chat(
-                message=request.message,
-                text_contexts=text_contexts,
-                image_sources=image_sources,
-                history=history,
-            ):
-                if sources is not None:
-                    final_sources = sources
-                elif token:
-                    full_response += token
-                    yield {"data": json.dumps({"type": "token", "content": token})}
+    chat_runner.request_stop(session_id)
+    return {"stopped": True}
 
-            sources_data = (
-                [s.model_dump() for s in final_sources] if final_sources else []
-            )
-            t0 = time.perf_counter()
-            await _save_turn(
-                session_id,
-                "assistant",
-                full_response,
-                json.dumps(sources_data),
-            )
-            _perf_log("save-assistant(db): %.3fs", time.perf_counter() - t0)
 
-            if full_response and sources_data:
-                await asyncio.to_thread(
-                    response_cache.set, request.message, full_response, sources_data
-                )
+# ── Active generation status endpoint ─────────────────────────────────────────
 
-            _perf_log("TOTAL chat: %.3fs", time.perf_counter() - t_total)
+@router.get("/chat/{session_id}/active")
+async def get_active_generation(
+    session_id: str,
+    current_user: PGUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_pg_db),
+):
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="session_id inválido")
 
-            yield {
-                "data": json.dumps({
-                    "type": "done",
-                    "session_id": session_id,
-                    "sources": sources_data,
-                    "from_cache": False,
-                })
-            }
+    sess_res = await db.execute(
+        select(ChatSession).where(
+            ChatSession.id == sid,
+            ChatSession.user_id == current_user.id,
+        )
+    )
+    if sess_res.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
-        except Exception as exc:
-            logger.error("Chat stream error: %s", exc)
-            yield {"data": json.dumps({"type": "error", "message": str(exc)})}
+    gen = chat_runner.get(session_id)
+    if gen is None:
+        return {"active": False, "status": "idle", "text": ""}
 
-    return EventSourceResponse(event_generator())
+    return {
+        "active": gen.status == "running",
+        "status": gen.status,
+        "text": gen.text,
+    }
+
+
+# ── Re-subscribe stream endpoint ──────────────────────────────────────────────
+
+@router.get("/chat/{session_id}/stream")
+async def resume_stream(
+    session_id: str,
+    current_user: PGUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_pg_db),
+):
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="session_id inválido")
+
+    sess_res = await db.execute(
+        select(ChatSession).where(
+            ChatSession.id == sid,
+            ChatSession.user_id == current_user.id,
+        )
+    )
+    if sess_res.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+
+    gen = chat_runner.get(session_id)
+    if gen is None:
+        raise HTTPException(status_code=404, detail="No hay generación activa para esta sesión")
+
+    return EventSourceResponse(_make_subscriber_generator(gen, session_id))

@@ -7,6 +7,7 @@ import { ZoomIn, FileText } from 'lucide-react';
 import type { Message, Source } from '@/types';
 import { getImageUrl, getDocumentDownloadUrl } from '@/lib/api';
 import ImageLightbox from './ImageLightbox';
+import ThinkingIndicator from './ThinkingIndicator';
 
 interface Props {
   message: Message;
@@ -359,20 +360,7 @@ export default function MessageBubble({ message }: Props) {
           }}
         >
           {message.isStreaming && !message.content ? (
-            <span className="flex items-center gap-1.5">
-              <span
-                className="w-1.5 h-1.5 rounded-full animate-bounce [animation-delay:0ms]"
-                style={{ background: 'var(--gold-bright)' }}
-              />
-              <span
-                className="w-1.5 h-1.5 rounded-full animate-bounce [animation-delay:150ms]"
-                style={{ background: 'var(--gold-bright)' }}
-              />
-              <span
-                className="w-1.5 h-1.5 rounded-full animate-bounce [animation-delay:300ms]"
-                style={{ background: 'var(--gold-bright)' }}
-              />
-            </span>
+            <ThinkingIndicator />
           ) : useInterleavedLayout ? (
             <>
               {sections.map((section, i) => (

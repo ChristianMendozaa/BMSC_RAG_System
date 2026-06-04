@@ -7,7 +7,7 @@ import { login } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 export default function LoginPage() {
-  const [username, setUsername] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -21,7 +21,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const data = await login(username, password);
+      const data = await login(identifier, password);
       localStorage.setItem('access_token', data.access_token);
       localStorage.setItem('user', JSON.stringify(data.user));
       await refetch();
@@ -64,13 +64,14 @@ export default function LoginPage() {
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1 text-gray-300">Usuario</label>
+            <label className="block text-sm font-medium mb-1 text-gray-300">Correo electrónico</label>
             <input
               type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              value={identifier}
+              onChange={(e) => setIdentifier(e.target.value)}
               required
-              autoComplete="username"
+              autoComplete="email"
+              placeholder="correo@bmsc.com.bo"
               className="w-full px-4 py-2 rounded border focus:outline-none focus:ring-1 focus:ring-yellow-500"
               style={{
                 background: 'var(--bg-elevated)',

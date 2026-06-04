@@ -174,7 +174,9 @@ Endpoints del panel de administración agregados en el overhaul (permisos mínim
 | `RERANKER_MODEL_ID` | BGE reranker HF ID (default: `BAAI/bge-reranker-v2-m3`) |
 | `RETRIEVAL_TOP_K` | Chunks fetched from ChromaDB before reranking (default: 12) |
 | `RERANK_TOP_K` | Items passed to the LLM after reranking (default: 3) |
+| `RERANK_TOP_K_MAX` | Max budget when scaled for multi-doc chats (default: 6; budget = min(RERANK_TOP_K + n_docs-1, MAX)) |
 | `RERANK_MAX_IMAGES` | Cap of image descriptions added to the rerank pool (default: 6) |
+| `RETRIEVAL_BALANCED_MAX_DOCS` | Docs ≤ this value use per-document retrieval (balanced); above this falls back to global query (default: 12) |
 | `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` | Seeded on first startup |
 | `CHAT_PERF_LOGGING` | Si `true`, emite logs `[chat-perf]` con tiempos por etapa del chat (embedding, search, rerank, espera en cola, prefill/TTFT, tok/s). Default `false`. |
 | `INGEST_PERF_LOGGING` | Si `true`, emite logs `[ingest-perf]` con tiempos por paso de la ingesta (parse, subida/descripción de imágenes con Gemma, embedding batch, upsert ChromaDB, escrituras Postgres). Default `false`. |

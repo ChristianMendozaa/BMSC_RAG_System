@@ -3,6 +3,7 @@ import { Geist_Mono } from "next/font/google";
 import "./globals.css";
 import NavBar from "@/components/NavBar";
 import { AuthProvider } from "@/lib/auth-context";
+import { ChatStreamProvider } from "@/lib/chat-stream-context";
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
@@ -29,8 +30,10 @@ export default function RootLayout({
     >
       <body className="h-full flex flex-col" style={{ background: 'var(--bg-base)' }}>
         <AuthProvider>
-          <NavBar />
-          <main className="flex-1 flex flex-col overflow-hidden">{children}</main>
+          <ChatStreamProvider>
+            <NavBar />
+            <main className="flex-1 flex flex-col overflow-hidden">{children}</main>
+          </ChatStreamProvider>
         </AuthProvider>
       </body>
     </html>

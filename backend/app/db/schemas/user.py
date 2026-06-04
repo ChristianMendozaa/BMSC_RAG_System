@@ -1,13 +1,13 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 
 from app.db.schemas.role import RoleOut
 
 
 class UserCreate(BaseModel):
-    username: str
+    email: EmailStr
     password: str
     role_id: uuid.UUID
     is_active: bool = True
@@ -23,6 +23,7 @@ class UserUpdate(BaseModel):
 class UserOut(BaseModel):
     id: uuid.UUID
     username: str
+    email: str | None = None
     is_active: bool
     is_system: bool
     role_id: uuid.UUID | None = None
@@ -40,8 +41,8 @@ class RoleAssignRequest(BaseModel):
     role_id: uuid.UUID | None = None
 
 
-class UsernameUpdateRequest(BaseModel):
-    username: str
+class EmailUpdateRequest(BaseModel):
+    email: EmailStr
 
 
 class UsersListResponse(BaseModel):

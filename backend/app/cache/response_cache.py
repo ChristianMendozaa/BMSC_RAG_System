@@ -45,15 +45,17 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip()).lower()
 
 
-def _key(text: str) -> str:
-    return hashlib.md5(_normalize(text).encode()).hexdigest()
+def _key(text: str, doc_ids: list[str] | None) -> str:
+    """Clave = hash(mensaje + scope).  El orden de doc_ids no importa."""
+    scope = ",".join(sorted(dict.fromkeys(doc_ids))) if doc_ids else "*"
+    return hashlib.md5(f"{_normalize(text)}\x1f{scope}".encode()).hexdigest()
 
 
-def get(message: str) -> tuple[str, list[dict]] | None:
+def get(message: str, doc_ids: list[str] | None) -> tuple[str, list[dict]] | None:
     """Retorna (response_text, sources) o None si no existe / expiró."""
     if not _DB_PATH:
         return None
-    k = _key(message)
+    k = _key(message, doc_ids)
     now = time.time()
     with _connect() as conn:
         row = conn.execute(
@@ -74,13 +76,17 @@ def get(message: str) -> tuple[str, list[dict]] | None:
     return response, json.loads(sources_json)
 
 
-def set(message: str, response: str, sources: list[dict]) -> None:
-    """Guarda respuesta e indexa los doc_ids usados como fuente."""
+def set(message: str, doc_ids: list[str] | None, response: str, sources: list[dict]) -> None:
+    """Guarda respuesta e indexa los doc_ids del scope para invalidación futura."""
     if not _DB_PATH:
         return
-    k = _key(message)
+    k = _key(message, doc_ids)
     now = time.time()
-    doc_ids = list({s["doc_id"] for s in sources if s.get("doc_id")})
+    # Indexar por scope completo: así invalidate_by_doc_id borra la entrada en cuanto
+    # cualquier documento del scope sea eliminado u obsoletizado, aunque no haya sido
+    # citado como fuente en la respuesta cacheada.
+    index_doc_ids = list(dict.fromkeys(doc_ids)) if doc_ids else \
+        list({s["doc_id"] for s in sources if s.get("doc_id")})
     with _connect() as conn:
         conn.execute(
             """INSERT INTO responses(key, response, sources_json, created_at, hit_count)
@@ -94,7 +100,7 @@ def set(message: str, response: str, sources: list[dict]) -> None:
         conn.execute("DELETE FROM response_docs WHERE key = ?", (k,))
         conn.executemany(
             "INSERT OR IGNORE INTO response_docs(key, doc_id) VALUES (?, ?)",
-            [(k, d) for d in doc_ids],
+            [(k, d) for d in index_doc_ids],
         )
         conn.commit()
 

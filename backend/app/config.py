@@ -57,7 +57,9 @@ class Settings(BaseSettings):
     # Retrieval knobs
     retrieval_top_k: int = 12   # candidatos que se piden a ChromaDB antes del reranking
     rerank_top_k: int = 3       # items que pasan al prompt tras reranking (texto + imagen unificados)
+    rerank_top_k_max: int = 6   # tope del presupuesto escalado en multi-doc
     rerank_max_images: int = 6  # tope de descripciones de imagen que entran al reranker (coste CPU)
+    retrieval_balanced_max_docs: int = 12  # por encima de este nº de docs se usa recuperación global
 
     # Performance logging (off por defecto; se activan desde .env)
     chat_perf_logging: bool = False

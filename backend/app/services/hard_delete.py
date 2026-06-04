@@ -1,15 +1,17 @@
 """
-Hard-delete de documentos: borra todo rastro (BD, archivos, vectores).
+Hard-delete de documentos: borra todo rastro (BD, archivos, vectores, caché).
 
 Usar solo cuando se requiere liberar espacio o purgar definitivamente. La ruta
 normal de borrado es marcar status='OBSOLETE'.
 """
+import asyncio
 import logging
 import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cache import response_cache
 from app.config import settings
 from app.db.models.document import PGDocument
 from app.db.models.rag_document_image import RagDocumentImage
@@ -34,7 +36,12 @@ async def hard_delete_document(db: AsyncSession, doc_id: uuid.UUID) -> None:
     if pg_doc is None:
         return
 
-    # 1. ChromaDB
+    # 1. Caché de respuestas LLM
+    n = await asyncio.to_thread(response_cache.invalidate_by_doc_id, str(doc_id))
+    if n:
+        logger.info("hard_delete doc=%s: invalidadas %d respuestas cacheadas", doc_id, n)
+
+    # 2. ChromaDB
     try:
         await vector_store.delete_by_doc_id(str(doc_id))
     except Exception as exc:
