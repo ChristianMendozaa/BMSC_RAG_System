@@ -59,11 +59,13 @@ const RAG_LABEL: Record<string, { label: string; color: string; icon: React.Reac
   sin_rag:         { label: 'Sin RAG',     color: '#4A6B58', icon: <Circle size={11} /> },
 };
 
-const PERM_LABELS = [
-  { key: 'can_manage_users' as keyof RoleInfo,        label: 'Gestionar usuarios' },
-  { key: 'can_manage_collections' as keyof RoleInfo,  label: 'Gestionar colecciones' },
-  { key: 'can_upload_documents' as keyof RoleInfo,    label: 'Subir documentos' },
-  { key: 'can_delete_documents' as keyof RoleInfo,    label: 'Eliminar documentos' },
+type PermKey = 'can_manage_users' | 'can_manage_collections' | 'can_upload_documents' | 'can_delete_documents';
+
+const PERM_LABELS: { key: PermKey; label: string }[] = [
+  { key: 'can_manage_users',        label: 'Gestionar usuarios' },
+  { key: 'can_manage_collections',  label: 'Gestionar colecciones' },
+  { key: 'can_upload_documents',    label: 'Subir documentos' },
+  { key: 'can_delete_documents',    label: 'Eliminar documentos' },
 ];
 
 // ── sub-components ─────────────────────────────────────────────────────────
@@ -1578,7 +1580,7 @@ function ColeccionesSection({ roles }: { roles: RoleInfo[] }) {
                     <span className="text-center">Acceso</span>
                   </div>
                   {/* Table rows */}
-                  <div className="divide-y max-h-60 overflow-y-auto" style={{ divideColor: 'var(--border-subtle)' }}>
+                  <div className="divide-y max-h-60 overflow-y-auto">
                     {selectableCollectionRoles(roles).map((r) => {
                       const p = rolePermsForm[r.id] ?? { can_view: false, can_download: false, can_chat: false };
                       const hasAccess = p.can_view || p.can_download || p.can_chat;
