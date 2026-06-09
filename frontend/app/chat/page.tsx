@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   getAccessibleCollections,
@@ -393,7 +394,7 @@ export default function ChatPage() {
 
         // Hydrate messages
         const msgs: Message[] = detail.messages.map((m) => ({
-          id: crypto.randomUUID(),
+          id: uuidv4(),
           role: m.role as Message['role'],
           content: m.content,
           sources: m.sources ?? [],
@@ -511,7 +512,7 @@ export default function ChatPage() {
     if (currentStream.status !== 'done' && currentStream.status !== 'stopped') return;
 
     const finalMsg: Message = {
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       role: 'assistant',
       content: currentStream.content,
       sources: currentStream.sources,
@@ -531,7 +532,7 @@ export default function ChatPage() {
     (text: string) => {
       if (isStreaming || !hasScope) return;
 
-      const userMsg: Message = { id: crypto.randomUUID(), role: 'user', content: text, sources: [] };
+      const userMsg: Message = { id: uuidv4(), role: 'user', content: text, sources: [] };
       setMessages((prev) => [...prev, userMsg]);
       setInputValue('');
 

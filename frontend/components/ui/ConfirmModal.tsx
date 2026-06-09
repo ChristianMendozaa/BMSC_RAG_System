@@ -32,7 +32,7 @@ export default function ConfirmModal({
           style={{ animation: 'fadeIn 150ms ease' }}
         />
         <Dialog.Content
-          className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm rounded-2xl p-6 shadow-2xl"
+          className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm rounded-2xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto"
           style={{
             background: 'var(--bg-elevated)',
             border: '1px solid var(--border-default)',

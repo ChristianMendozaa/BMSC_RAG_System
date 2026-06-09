@@ -344,9 +344,11 @@ export default function MessageBubble({ message }: Props) {
     ? distributePageCitations(pageCitations, sections.length)
     : [];
 
+  const isThinking = message.isStreaming && !message.content;
+
   return (
     <div className="flex justify-start animate-slide-up">
-      <div className="max-w-[88%] w-full">
+      <div className={isThinking ? '' : 'max-w-[88%] w-full'}>
         {/* Message bubble */}
         <div
           className="rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed shadow-sm"

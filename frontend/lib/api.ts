@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from 'uuid';
 import type {
   BlockerItem,
   ChatRequest,
@@ -727,7 +728,7 @@ export async function renameChatSession(id: string, title: string): Promise<Chat
 export async function getConversationHistory(sessionId: string): Promise<Message[]> {
   const detail = await getChatSession(sessionId);
   return detail.messages.map((m) => ({
-    id: crypto.randomUUID(),
+    id: uuidv4(),
     role: m.role as Message['role'],
     content: m.content,
     sources: m.sources ?? [],

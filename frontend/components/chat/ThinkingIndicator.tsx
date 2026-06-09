@@ -26,31 +26,29 @@ export default function ThinkingIndicator() {
   }, []);
 
   return (
-    <span className="flex flex-col gap-2.5">
+    <span className="flex items-center gap-3">
       {/* Morph squares */}
-      <span className="flex items-center justify-start">
-        <span className="relative w-8 h-8">
-          {[0, 1, 2, 3].map((i) => (
-            <span
-              key={i}
-              className="absolute w-2.5 h-2.5"
-              style={{
-                top: '50%',
-                left: '50%',
-                marginTop: '-5px',
-                marginLeft: '-5px',
-                background: 'var(--gold-bright)',
-                animation: `morph-${i} 2s infinite ease-in-out`,
-                animationDelay: `${i * 0.18}s`,
-              }}
-            />
-          ))}
-        </span>
+      <span className="relative w-8 h-8 flex-shrink-0">
+        {[0, 1, 2, 3].map((i) => (
+          <span
+            key={i}
+            className="absolute w-2.5 h-2.5"
+            style={{
+              top: '50%',
+              left: '50%',
+              marginTop: '-5px',
+              marginLeft: '-5px',
+              background: 'var(--gold-bright)',
+              animation: `morph-${i} 2s infinite ease-in-out`,
+              animationDelay: `${i * 0.18}s`,
+            }}
+          />
+        ))}
       </span>
 
       {/* Rotating status text */}
       <span
-        className="text-xs"
+        className="text-xs whitespace-nowrap"
         style={{
           color: 'var(--gold-muted)',
           fontFamily: 'DM Sans, sans-serif',

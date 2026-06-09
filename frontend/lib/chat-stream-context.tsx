@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import type { ChatRequest, Source } from '@/types';
 import {
   getActiveGeneration,
@@ -85,7 +86,7 @@ export function ChatStreamProvider({ children }: { children: React.ReactNode }) 
       request: ChatRequest,
       opts: { onNewSession: (realSessionId: string, tempKey: string) => void },
     ): string => {
-      const tempKey = request.session_id ?? crypto.randomUUID();
+      const tempKey = request.session_id ?? uuidv4();
       const ctrl = new AbortController();
       abortRefs.current.set(tempKey, ctrl);
 
