@@ -1,28 +1,14 @@
-import tailwindcss from '@tailwindcss/postcss';
-import oklabFunction from '@csstools/postcss-oklab-function';
-import cascadeLayers from '@csstools/postcss-cascade-layers';
-import isPseudoClass from '@csstools/postcss-is-pseudo-class';
-
-// Converts :where() → :is() so the isPseudoClass plugin can expand both.
-// Edge 86 supports neither; the specificity change is acceptable for intranet use.
-function whereToIs() {
-  return {
-    postcssPlugin: 'postcss-where-to-is',
-    Rule(rule) {
-      if (rule.selector?.includes(':where(')) {
-        rule.selector = rule.selector.replace(/:where\(/g, ':is(');
-      }
-    },
-  };
-}
-whereToIs.postcss = true;
-
-export default {
-  plugins: [
-    tailwindcss(),
-    oklabFunction({ subFeatures: { displayP3: false } }),
-    cascadeLayers(),
-    whereToIs(),
-    isPseudoClass(),
-  ],
+// All plugins are string keys → PostCSS resolves them via Node.js require(), not Turbopack.
+// process.cwd() gives an absolute path for the local plugin so it resolves correctly
+// regardless of the directory from which Turbopack evaluates this config.
+const config = {
+  plugins: {
+    '@tailwindcss/postcss': {},
+    '@csstools/postcss-oklab-function': { subFeatures: { displayP3: false } },
+    '@csstools/postcss-cascade-layers': {},
+    [process.cwd() + '/postcss-where-plugin.cjs']: {},
+    '@csstools/postcss-is-pseudo-class': {},
+  },
 };
+
+export default config;
