@@ -27,6 +27,7 @@
   },
   "devDependencies": {
     "@csstools/postcss-cascade-layers": "^6.0.0",
+    "@csstools/postcss-is-pseudo-class": "^6.0.0",
     "@csstools/postcss-oklab-function": "^5.0.4",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",

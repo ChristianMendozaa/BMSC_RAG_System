@@ -57,6 +57,9 @@ importers:
       '@csstools/postcss-cascade-layers':
         specifier: ^6.0.0
         version: 6.0.0(postcss@8.5.14)
+      '@csstools/postcss-is-pseudo-class':
+        specifier: ^6.0.0
+        version: 6.0.0(postcss@8.5.14)
       '@csstools/postcss-oklab-function':
         specifier: ^5.0.4
         version: 5.0.4(postcss@8.5.14)
@@ -188,6 +191,12 @@ packages:
 
   '@csstools/postcss-cascade-layers@6.0.0':
     resolution: {integrity: sha512-WhsECqmrEZQGqaPlBA7JkmF/CJ2/+wetL4fkL9sOPccKd32PQ1qToFM6gqSI5rkpmYqubvbxjEJhyMTHYK0vZQ==}
+    engines: {node: '>=20.19.0'}
+    peerDependencies:
+      postcss: ^8.4
+
+  '@csstools/postcss-is-pseudo-class@6.0.0':
+    resolution: {integrity: sha512-1Hdy/ykg9RDo8vU8RiM2o+RaXO39WpFPaIkHxlAEJFofle/lc33tdQMKhBk3jR/Fe+uZNLOs3HlowFafyFptVw==}
     engines: {node: '>=20.19.0'}
     peerDependencies:
       postcss: ^8.4
@@ -2898,6 +2907,12 @@ snapshots:
   '@csstools/css-tokenizer@4.0.0': {}
 
   '@csstools/postcss-cascade-layers@6.0.0(postcss@8.5.14)':
+    dependencies:
+      '@csstools/selector-specificity': 6.0.0(postcss-selector-parser@7.1.1)
+      postcss: 8.5.14
+      postcss-selector-parser: 7.1.1
+
+  '@csstools/postcss-is-pseudo-class@6.0.0(postcss@8.5.14)':
     dependencies:
       '@csstools/selector-specificity': 6.0.0(postcss-selector-parser@7.1.1)
       postcss: 8.5.14
