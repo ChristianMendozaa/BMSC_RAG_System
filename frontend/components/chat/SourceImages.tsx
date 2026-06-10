@@ -33,12 +33,13 @@ export default function SourceImages({ sources }: Props) {
               rel="noopener noreferrer"
               className="flex flex-col gap-1.5 group"
             >
+              {/* paddingTop 75% = ratio 4/3 sin aspect-ratio (no soportado en Edge 86) */}
               <div
-                className="w-full rounded-lg overflow-hidden transition-all"
+                className="relative w-full rounded-lg overflow-hidden transition-all"
                 style={{
                   border: '1px solid var(--border-default)',
                   background: 'var(--bg-surface)',
-                  aspectRatio: '4 / 3',
+                  paddingTop: '75%',
                 }}
                 onMouseEnter={(e) => {
                   (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--gold-bright)';
@@ -53,7 +54,7 @@ export default function SourceImages({ sources }: Props) {
                 <img
                   src={getImageUrl(source.image_id!)}
                   alt={label}
-                  className="w-full h-full object-contain"
+                  className="absolute inset-0 w-full h-full object-contain"
                   style={{ background: 'var(--bg-elevated)' }}
                 />
               </div>

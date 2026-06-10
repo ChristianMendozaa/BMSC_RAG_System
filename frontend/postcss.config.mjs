@@ -4,6 +4,8 @@
 const config = {
   plugins: {
     '@tailwindcss/postcss': {},
+    [process.cwd() + '/postcss-translate-plugin.cjs']: {},
+    'postcss-logical': { inlineDirection: 'left-to-right', blockDirection: 'top-to-bottom' },
     '@csstools/postcss-oklab-function': { subFeatures: { displayP3: false } },
     '@csstools/postcss-cascade-layers': {},
     [process.cwd() + '/postcss-where-plugin.cjs']: {},

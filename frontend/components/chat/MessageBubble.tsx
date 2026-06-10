@@ -143,11 +143,15 @@ function InlineImageCard({ source, onOpen }: ImageCardProps) {
       }}
       title="Clic para ampliar"
     >
-      <div style={{ aspectRatio: '16/9', background: 'var(--bg-elevated)', overflow: 'hidden' }}>
+      {/* paddingTop 56.25% = ratio 16/9 sin aspect-ratio (no soportado en Edge 86) */}
+      <div
+        className="relative"
+        style={{ paddingTop: '56.25%', background: 'var(--bg-elevated)', overflow: 'hidden' }}
+      >
         <img
           src={getImageUrl(source.image_id!)}
           alt={label}
-          className="w-full h-full object-contain transition-transform duration-300 group-hover:scale-105"
+          className="absolute inset-0 w-full h-full object-contain transition-transform duration-300 group-hover:[transform:scale(1.05)]"
           style={{ background: 'var(--bg-elevated)' }}
         />
       </div>

@@ -2,9 +2,13 @@
   "name": "doc_chat_frontend",
   "version": "0.1.0",
   "private": true,
+  "browserslist": [
+    "chrome >= 86",
+    "edge >= 86"
+  ],
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build && node scripts/check-edge86-css.mjs",
     "start": "next start",
     "lint": "eslint"
   },
@@ -35,6 +39,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.5",
+    "postcss-logical": "^9.0.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

@@ -358,12 +358,17 @@ export default function DocumentTable({ documents, onRefresh }: Props) {
                     <div className="grid grid-cols-4 gap-2">
                       {detailDoc.images.map((img) => (
                         <div key={img.id} className="relative">
-                          <img
-                            src={getImageUrl(img.id)}
-                            alt={img.description ?? `Imagen ${img.image_index}`}
-                            className="w-full aspect-square object-cover rounded-lg"
+                          {/* pb-[100%] = cuadrado sin aspect-ratio (no soportado en Edge 86) */}
+                          <div
+                            className="relative w-full pb-[100%] rounded-lg overflow-hidden"
                             style={{ border: '1px solid var(--border-subtle)' }}
-                          />
+                          >
+                            <img
+                              src={getImageUrl(img.id)}
+                              alt={img.description ?? `Imagen ${img.image_index}`}
+                              className="absolute inset-0 w-full h-full object-cover"
+                            />
+                          </div>
                           {img.page_number && (
                             <span
                               className="absolute bottom-1 right-1 text-xs px-1 rounded"
