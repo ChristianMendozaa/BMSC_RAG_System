@@ -3,7 +3,6 @@ from dataclasses import dataclass, field
 from io import BytesIO
 
 from pptx import Presentation
-from pptx.util import Inches
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 logger = logging.getLogger(__name__)
@@ -71,12 +70,15 @@ def parse(file_bytes: bytes) -> ParseResult:
                     )
 
             try:
-                notes = slide.notes_slide
-                notes_text = notes.notes_text_frame.text.strip()
-                if notes_text:
-                    slide_texts.append(f"[Notas del presentador]: {notes_text}")
-            except Exception:
-                pass
+                if slide.has_notes_slide:
+                    notes_frame = slide.notes_slide.notes_text_frame
+                    notes_text = notes_frame.text.strip() if notes_frame is not None else ""
+                    if notes_text:
+                        slide_texts.append(f"[Notas del presentador]: {notes_text}")
+            except Exception as exc:
+                logger.warning(
+                    "Failed to read presenter notes on slide %d: %s", slide_num, exc
+                )
 
             if slide_texts:
                 result.text_blocks.append(

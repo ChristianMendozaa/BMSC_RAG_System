@@ -38,7 +38,7 @@ def _extract_figure_caption(text: str) -> str:
 
 from app.services import embedder, file_storage, vector_store
 from app.services import chunker as chunker_service
-from app.services.parsers import pdf_parser, docx_parser, pptx_parser, xlsx_parser, image_parser
+from app.services.parsers import ACCEPTED_EXTENSIONS, parse_file  # noqa: F401 — ACCEPTED_EXTENSIONS re-exportado para los routers
 
 logger = logging.getLogger(__name__)
 
@@ -62,13 +62,6 @@ def _is_cancelled(doc_id: str) -> bool:
 def _clear_cancelled(doc_id: str) -> None:
     _cancelled_docs.discard(doc_id)
 
-
-ACCEPTED_EXTENSIONS = {
-    ".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".md",
-    ".jpg", ".jpeg", ".png", ".webp",
-}
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
-TEXT_EXTENSIONS = {".txt", ".md"}
 
 _IMAGE_IO_SEM = asyncio.Semaphore(4)
 
@@ -160,25 +153,7 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
     logger.info("doc_id=%s: [2/5] Parseando documento (%s)...", doc_id, ext)
     _t = time.perf_counter()
     try:
-        if ext in IMAGE_EXTENSIONS:
-            parse_result = image_parser.parse(file_bytes)
-        elif ext == ".pdf":
-            parse_result = pdf_parser.parse(file_bytes)
-        elif ext == ".docx":
-            parse_result = docx_parser.parse(file_bytes)
-        elif ext == ".pptx":
-            parse_result = pptx_parser.parse(file_bytes)
-        elif ext == ".xlsx":
-            parse_result = xlsx_parser.parse(file_bytes)
-        elif ext in TEXT_EXTENSIONS:
-            from app.services.parsers.image_parser import ParseResult, TextBlock
-            text = file_bytes.decode("utf-8", errors="replace")
-            parse_result = ParseResult(
-                text_blocks=[TextBlock(text=text, page_number=None)],
-                image_blocks=[],
-            )
-        else:
-            raise ValueError(f"Unsupported file extension: {ext}")
+        parse_result = parse_file(ext, file_bytes)
     except Exception as exc:
         logger.error("doc_id=%s: parser failed: %s", doc_id, exc)
         await _update_doc_status(doc_id, "error", f"Parser error: {exc}")

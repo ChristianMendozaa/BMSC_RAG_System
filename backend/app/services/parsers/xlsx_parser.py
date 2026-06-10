@@ -24,6 +24,7 @@ def parse(file_bytes: bytes) -> ParseResult:
     result = ParseResult()
 
     try:
+        # read_only no expone imágenes/gráficos embebidos: solo se extrae texto de celdas
         wb = load_workbook(BytesIO(file_bytes), read_only=True, data_only=True)
     except Exception as exc:
         logger.error("Failed to open XLSX: %s", exc)
