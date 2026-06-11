@@ -630,17 +630,18 @@ export default function ChatPage() {
                   background: 'var(--bg-elevated)',
                   borderRight: '1px solid var(--border-gold)',
                 }}
+                aria-describedby={undefined}
               >
                 <div
                   className="flex items-center justify-between px-4 py-3"
                   style={{ borderBottom: '1px solid var(--border-subtle)' }}
                 >
-                  <span
+                  <Dialog.Title
                     className="text-sm font-semibold"
                     style={{ color: 'var(--gold-muted)', fontFamily: 'Playfair Display, serif' }}
                   >
                     Mis Colecciones
-                  </span>
+                  </Dialog.Title>
                   <Dialog.Close asChild>
                     <button style={{ color: 'var(--text-muted)' }} className="p-1 rounded">
                       <X size={16} />

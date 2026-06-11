@@ -148,3 +148,10 @@ body {
   background: var(--gold-subtle);
   color: var(--gold-bright);
 }
+
+/* Ocultar el ojito nativo de Edge: es gris oscuro sobre nuestros inputs oscuros
+   y desaparece al perder el foco. Usamos un toggle propio en su lugar. */
+input[type='password']::-ms-reveal,
+input[type='password']::-ms-clear {
+  display: none;
+}

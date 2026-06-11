@@ -113,7 +113,9 @@ export default function NavBar() {
           <Dialog.Content
             className="fixed left-0 top-0 h-full w-64 z-50 flex flex-col md:hidden"
             style={{ background: 'var(--bg-elevated)', borderRight: '1px solid var(--border-gold)' }}
+            aria-describedby={undefined}
           >
+            <Dialog.Title className="sr-only">Menú de navegación</Dialog.Title>
             {/* Drawer header */}
             <div
               className="flex items-center justify-between px-4 py-3"
