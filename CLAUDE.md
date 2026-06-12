@@ -153,6 +153,7 @@ Endpoints del panel de administración agregados en el overhaul (permisos mínim
 | `POST /api/users/{id}/activate` | `is_active=true` + `tokens_valid_after=NOW()`. (`can_manage_users`) |
 | `POST /api/users/{id}/reset-password` | Reset por admin (no requiere contraseña anterior). `tokens_valid_after=NOW()` → invalida todas las sesiones. (`can_manage_users`) |
 | `PATCH /api/users/{id}/role` | Asigna o quita rol. Acepta `{role_id: UUID\|null}`. (`can_manage_users`) |
+| `DELETE /api/users/{id}/permanent` | Hard delete de usuario. Requiere `is_active=false` (409 si activo); bloquea self e `is_system`. CASCADE borra permisos/tokens/chats; `created_by` de users/collections/documents/document_versions queda NULL. (`can_manage_users`) |
 
 ## Environment Variables Reference
 

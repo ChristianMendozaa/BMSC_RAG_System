@@ -51,7 +51,7 @@ CREATE TABLE users (
     tokens_valid_after  TIMESTAMPTZ,
     failed_login_attempts INT        NOT NULL DEFAULT 0,
     locked_until        TIMESTAMPTZ,
-    created_by          UUID         REFERENCES users(id),
+    created_by          UUID         REFERENCES users(id) ON DELETE SET NULL,
     created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
@@ -65,7 +65,7 @@ CREATE TABLE collections (
     name        VARCHAR(200) NOT NULL UNIQUE,
     description TEXT,
     is_active   BOOLEAN      NOT NULL DEFAULT true,
-    created_by  UUID         REFERENCES users(id),
+    created_by  UUID         REFERENCES users(id) ON DELETE SET NULL,
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
@@ -117,7 +117,7 @@ CREATE TABLE documents (
     title         VARCHAR(500)    NOT NULL,
     collection_id UUID            REFERENCES collections(id) ON DELETE SET NULL,
     status        document_status NOT NULL DEFAULT 'ACTIVE',
-    created_by    UUID            REFERENCES users(id),
+    created_by    UUID            REFERENCES users(id) ON DELETE SET NULL,
     created_at    TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
     updated_at    TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
@@ -181,7 +181,7 @@ CREATE TABLE document_versions (
     is_current        BOOLEAN      NOT NULL DEFAULT false,
     index_status      index_status NOT NULL DEFAULT 'PENDING',
     change_notes      TEXT,
-    created_by        UUID         REFERENCES users(id),
+    created_by        UUID         REFERENCES users(id) ON DELETE SET NULL,
     created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_document_version UNIQUE (document_id, version_number)
 );

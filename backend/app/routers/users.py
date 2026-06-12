@@ -2,11 +2,14 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_permission
 from app.core.security import get_password_hash
+from app.db.models.collection import Collection
+from app.db.models.document import PGDocument
+from app.db.models.document_version import DocumentVersion
 from app.db.models.role import PGRole
 from app.db.models.user import PGUser
 from app.db.schemas.user import (
@@ -141,6 +144,43 @@ async def deactivate_user(
             raise HTTPException(status_code=400, detail="No se puede desactivar al único SUPERADMIN activo")
 
     user.is_active = False
+    await db.commit()
+
+
+@router.delete("/{user_id}/permanent", status_code=204)
+async def delete_user_permanent(
+    user_id: uuid.UUID,
+    db: AsyncSession = Depends(get_pg_db),
+    current_user: PGUser = Depends(require_permission("can_manage_users")),
+):
+    """
+    Hard delete de un usuario desactivado. Sus permisos, tokens revocados y
+    conversaciones se borran por CASCADE; el contenido que creó (usuarios,
+    colecciones, documentos, versiones) queda con created_by=NULL.
+    """
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="No puedes eliminar tu propia cuenta")
+
+    user = await db.scalar(select(PGUser).where(PGUser.id == user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    if user.is_system:
+        raise HTTPException(status_code=400, detail="Usuario del sistema, no puede ser eliminado")
+
+    if user.is_active:
+        raise HTTPException(
+            status_code=409,
+            detail="El usuario debe estar desactivado antes de eliminarlo permanentemente",
+        )
+
+    # FKs created_by sin ON DELETE en BDs ya desplegadas: desvincular antes de borrar
+    for model in (PGUser, Collection, PGDocument, DocumentVersion):
+        await db.execute(
+            update(model).where(model.created_by == user_id).values(created_by=None)
+        )
+
+    await db.delete(user)
     await db.commit()
 
 

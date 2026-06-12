@@ -25,6 +25,43 @@ async def ensure_lockout_columns(db: AsyncSession) -> None:
     logger.info("✓ Columnas de bloqueo de login verificadas")
 
 
+# Tablas con FK created_by → users(id) que deben ser ON DELETE SET NULL
+# (requisito del hard delete de usuarios; bd.sql ya lo trae en instalaciones nuevas).
+_CREATED_BY_TABLES = ("users", "collections", "documents", "document_versions")
+
+_FIND_CREATED_BY_FK = text("""
+    SELECT con.conname, con.confdeltype
+    FROM pg_constraint con
+    JOIN pg_class rel ON rel.oid = con.conrelid
+    JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = ANY(con.conkey)
+    WHERE con.contype = 'f' AND rel.relname = :table AND att.attname = 'created_by'
+""")
+
+
+async def ensure_created_by_set_null(db: AsyncSession) -> None:
+    """Recrea las FKs created_by como ON DELETE SET NULL en BDs ya desplegadas.
+    Solo altera la constraint si su acción actual no es SET NULL ('n')."""
+    for table in _CREATED_BY_TABLES:
+        row = (await db.execute(_FIND_CREATED_BY_FK, {"table": table})).first()
+        if row is None:
+            logger.warning("✗ FK created_by no encontrada en tabla %s", table)
+            continue
+        conname, deltype = row
+        # asyncpg devuelve el tipo "char" de pg_catalog como bytes
+        if isinstance(deltype, bytes):
+            deltype = deltype.decode()
+        if deltype == "n":
+            continue
+        await db.execute(text(
+            f'ALTER TABLE {table} DROP CONSTRAINT "{conname}", '
+            f'ADD CONSTRAINT "{conname}" FOREIGN KEY (created_by) '
+            f"REFERENCES users(id) ON DELETE SET NULL"
+        ))
+        logger.info("✓ FK %s.created_by migrada a ON DELETE SET NULL", table)
+    await db.commit()
+    logger.info("✓ FKs created_by verificadas")
+
+
 async def seed_initial_admin(db: AsyncSession) -> None:
     count = await db.scalar(select(func.count()).select_from(PGUser))
     if count and count > 0:

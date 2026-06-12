@@ -174,6 +174,14 @@ export async function deactivateUser(id: string): Promise<void> {
   return handleResponse<void>(res);
 }
 
+export async function deleteUserPermanent(id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/users/${id}/permanent`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<void>(res);
+}
+
 export async function activateUser(id: string): Promise<UserOut> {
   const res = await fetch(`${API_URL}/api/users/${id}/activate`, {
     method: 'POST',

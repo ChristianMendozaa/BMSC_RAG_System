@@ -18,7 +18,7 @@ from app.schemas import HealthResponse, HealthService
 from app.services import embedder, file_storage, vector_store
 from app.utils.model_manager import download_and_load_all
 from app.db.session import PGAsyncSessionLocal, pg_engine
-from app.seed import ensure_lockout_columns, seed_initial_admin
+from app.seed import ensure_created_by_set_null, ensure_lockout_columns, seed_initial_admin
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,6 +41,7 @@ async def lifespan(_app: FastAPI):
     logger.info("[2/5] Conectando a PostgreSQL y creando datos iniciales...")
     async with PGAsyncSessionLocal() as pg_db:
         await ensure_lockout_columns(pg_db)
+        await ensure_created_by_set_null(pg_db)
         await seed_initial_admin(pg_db)
 
     logger.info("[3/5] Inicializando ChromaDB (vector store embebido)...")

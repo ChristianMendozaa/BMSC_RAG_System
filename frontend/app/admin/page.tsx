@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import {
   getRoles, createRole, updateRole, deleteRole,
-  getUsers, createUser, deactivateUser, activateUser, resetUserPassword, assignUserRole, changeUserEmail,
+  getUsers, createUser, deactivateUser, activateUser, resetUserPassword, assignUserRole, changeUserEmail, deleteUserPermanent,
   getCollections, createCollection, deleteCollection, CollectionHasDocumentsError,
   getCollectionRolePerms, updateCollectionRolePerm,
   getCollectionUserPerms, updateCollectionUserPerm, deleteCollectionUserPerm,
@@ -426,6 +426,85 @@ function ChangeEmailModal({
   );
 }
 
+function PermanentDeleteUserModal({
+  user, onClose, onDone, flash,
+}: {
+  user: UserOut;
+  onClose: () => void;
+  onDone: () => void;
+  flash: (msg: string, type?: 'ok' | 'err') => void;
+}) {
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+  const expected = user.username;
+  const matches = typed.trim() === expected;
+
+  const doPurge = async () => {
+    if (!matches) return;
+    setBusy(true);
+    try {
+      await deleteUserPermanent(user.id);
+      flash('Usuario eliminado permanentemente');
+      onDone();
+      onClose();
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'Error', 'err');
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Dialog.Root open onOpenChange={(o) => { if (!o && !busy) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+        <Dialog.Content
+          className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto"
+          style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle size={18} style={{ color: '#f87171' }} />
+            <Dialog.Title
+              className="text-base font-semibold"
+              style={{ color: '#f87171', fontFamily: 'Playfair Display, serif' }}
+            >
+              Eliminar usuario permanentemente
+            </Dialog.Title>
+          </div>
+          <Dialog.Description className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
+            Esta acción borra la cuenta, sus permisos y todas sus conversaciones.
+            Los documentos y colecciones que creó se conservan, pero quedan sin creador asignado.{' '}
+            <strong>No se puede deshacer.</strong>
+          </Dialog.Description>
+          <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
+            Escriba el nombre del usuario para confirmar:
+          </p>
+          <p className="text-xs mb-2 font-mono px-2 py-1 rounded" style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }}>
+            {expected}
+          </p>
+          <Input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Nombre del usuario..." />
+          <div className="flex justify-end gap-2 mt-5">
+            <button
+              disabled={busy}
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg text-xs font-medium disabled:opacity-50"
+              style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-surface)' }}
+            >Cancelar</button>
+            <button
+              disabled={busy || !matches}
+              onClick={doPurge}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+              style={{ background: '#7f1d1d', color: '#fee2e2' }}
+            >
+              {busy && <Loader2 size={12} className="animate-spin" />}
+              Eliminar para siempre
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
   const [users, setUsers] = useState<UserOut[]>([]);
   const [form, setForm] = useState({ email: '', password: '', role_id: '' });
@@ -438,6 +517,7 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
   const [resetPwUser, setResetPwUser] = useState<UserOut | null>(null);
   const [assignRoleUser, setAssignRoleUser] = useState<UserOut | null>(null);
   const [changeEmailUser, setChangeEmailUser] = useState<UserOut | null>(null);
+  const [permanentDeleteUser, setPermanentDeleteUser] = useState<UserOut | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
 
   // Filter state
@@ -529,6 +609,9 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
       )}
       {changeEmailUser && (
         <ChangeEmailModal user={changeEmailUser} onClose={() => setChangeEmailUser(null)} onDone={load} flash={flash} />
+      )}
+      {permanentDeleteUser && (
+        <PermanentDeleteUserModal user={permanentDeleteUser} onClose={() => setPermanentDeleteUser(null)} onDone={load} flash={flash} />
       )}
       <ConfirmModal
         open={!!confirmDeactivate}
@@ -723,6 +806,16 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
                         Reactivar
                       </button>
                     )
+                  )}
+                  {!u.is_system && !u.is_active && (
+                    <button
+                      onClick={() => setPermanentDeleteUser(u)}
+                      className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors"
+                      style={{ borderColor: '#7f1d1d', color: '#f87171' }}
+                      title="Eliminar permanentemente"
+                    >
+                      <Trash2 size={11} /> Eliminar
+                    </button>
                   )}
                 </div>
               </div>
