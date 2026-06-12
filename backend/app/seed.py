@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -9,6 +9,20 @@ from app.db.models.role import PGRole
 from app.db.models.user import PGUser
 
 logger = logging.getLogger(__name__)
+
+# Migración in-place para BDs existentes (bd.sql ya las trae en instalaciones nuevas).
+# ADD COLUMN IF NOT EXISTS es idempotente: seguro de ejecutar en cada arranque.
+_LOCKOUT_DDL = (
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INT NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ",
+)
+
+
+async def ensure_lockout_columns(db: AsyncSession) -> None:
+    for stmt in _LOCKOUT_DDL:
+        await db.execute(text(stmt))
+    await db.commit()
+    logger.info("✓ Columnas de bloqueo de login verificadas")
 
 
 async def seed_initial_admin(db: AsyncSession) -> None:

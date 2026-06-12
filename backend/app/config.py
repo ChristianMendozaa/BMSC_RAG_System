@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 480
 
+    # Bloqueo por intentos fallidos de login (no aplica a usuarios is_system)
+    max_login_attempts: int = 5
+    lockout_minutes: int = 15
+
     # Seed de usuario inicial
     initial_admin_username: str = "admin"
     initial_admin_password: str = "admin123"

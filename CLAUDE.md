@@ -98,6 +98,7 @@ Browser → Next.js 16 frontend → FastAPI 0.115 backend
   - **Per-token**: JTI blacklist check against PostgreSQL `revoked_tokens` on every request (explicit logout).
   - **Per-user**: `users.tokens_valid_after TIMESTAMPTZ`. Set to `NOW()` on password reset or user reactivation. Any JWT with `iat < tokens_valid_after` is rejected with 401 — invalidates all active sessions without a per-user JTI list.
 - Login rejects users with `role_id IS NULL` (orphaned when their role was deleted) with 403 "Su cuenta no tiene rol asignado."
+- **Account lockout**: `MAX_LOGIN_ATTEMPTS` failed logins (default 5) set `users.locked_until = NOW() + LOCKOUT_MINUTES` (default 15). While locked, login returns 401 without verifying the password. Users with `is_system=true` (the seeded admin) are exempt — they never accumulate attempts nor lock. Counter resets on successful login; `POST /users/{id}/activate` and `/reset-password` clear the lock immediately. Columns `failed_login_attempts`/`locked_until` are added idempotently at startup (`seed.py::ensure_lockout_columns`).
 - Two-tier access control: Role-level defaults + per-document/collection ACL rows
 - Resolution order: explicit user permission → role permission → collection membership → deny
 
@@ -177,6 +178,8 @@ Endpoints del panel de administración agregados en el overhaul (permisos mínim
 | `RERANK_TOP_K_MAX` | Max budget when scaled for multi-doc chats (default: 6; budget = min(RERANK_TOP_K + n_docs-1, MAX)) |
 | `RERANK_MAX_IMAGES` | Cap of image descriptions added to the rerank pool (default: 6) |
 | `RETRIEVAL_BALANCED_MAX_DOCS` | Docs ≤ this value use per-document retrieval (balanced); above this falls back to global query (default: 12) |
+| `MAX_LOGIN_ATTEMPTS` | Failed logins before temporary lockout (default: 5; `is_system` users exempt) |
+| `LOCKOUT_MINUTES` | Lockout duration in minutes, auto-expires (default: 15) |
 | `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` | Seeded on first startup |
 | `CHAT_PERF_LOGGING` | Si `true`, emite logs `[chat-perf]` con tiempos por etapa del chat (embedding, search, rerank, espera en cola, prefill/TTFT, tok/s). Default `false`. |
 | `INGEST_PERF_LOGGING` | Si `true`, emite logs `[ingest-perf]` con tiempos por paso de la ingesta (parse, subida/descripción de imágenes con Gemma, embedding batch, upsert ChromaDB, escrituras Postgres). Default `false`. |

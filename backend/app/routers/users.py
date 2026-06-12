@@ -156,6 +156,8 @@ async def activate_user(
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     user.is_active = True
     user.tokens_valid_after = datetime.now(timezone.utc)
+    user.failed_login_attempts = 0
+    user.locked_until = None
     await db.commit()
     updated = await db.scalar(select(PGUser).where(PGUser.id == user_id))
     return updated
@@ -181,6 +183,8 @@ async def reset_user_password(
 
     user.hashed_password = get_password_hash(body.new_password)
     user.tokens_valid_after = datetime.now(timezone.utc)
+    user.failed_login_attempts = 0
+    user.locked_until = None
     await db.commit()
 
 

@@ -1,10 +1,11 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.security import create_access_token, decode_token, verify_password
 from app.db.models.revoked_token import RevokedToken
 from app.db.models.user import PGUser
@@ -34,11 +35,51 @@ async def login(
             )
         )
 
+    now = datetime.now(timezone.utc)
+
+    # Cuenta bloqueada por intentos fallidos: rechazar sin verificar la contraseña.
+    if user and user.locked_until and user.locked_until > now:
+        remaining = int((user.locked_until - now).total_seconds() // 60) + 1
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=(
+                "Cuenta bloqueada por intentos fallidos. "
+                f"Intente nuevamente en {remaining} minuto(s)."
+            ),
+        )
+
     if not user or not verify_password(body.password, user.hashed_password):
+        # Los usuarios del sistema (admin default) nunca se bloquean: evita
+        # que intentos maliciosos dejen el sistema sin administrador.
+        if user and not user.is_system:
+            result = await db.execute(
+                update(PGUser)
+                .where(PGUser.id == user.id)
+                .values(failed_login_attempts=PGUser.failed_login_attempts + 1)
+                .returning(PGUser.failed_login_attempts)
+            )
+            attempts = result.scalar_one()
+            if attempts >= settings.max_login_attempts:
+                await db.execute(
+                    update(PGUser)
+                    .where(PGUser.id == user.id)
+                    .values(
+                        failed_login_attempts=0,
+                        locked_until=now + timedelta(minutes=settings.lockout_minutes),
+                    )
+                )
+            await db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Credenciales incorrectas",
         )
+
+    # Login exitoso: limpiar contador y bloqueo expirado si quedaron seteados.
+    if user.failed_login_attempts or user.locked_until:
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        await db.commit()
+
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -49,6 +49,8 @@ CREATE TABLE users (
     is_active           BOOLEAN      NOT NULL DEFAULT true,
     is_system           BOOLEAN      NOT NULL DEFAULT false,
     tokens_valid_after  TIMESTAMPTZ,
+    failed_login_attempts INT        NOT NULL DEFAULT 0,
+    locked_until        TIMESTAMPTZ,
     created_by          UUID         REFERENCES users(id),
     created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()

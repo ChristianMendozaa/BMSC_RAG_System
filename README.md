@@ -208,6 +208,14 @@ Source: `routers/auth.py`, `core/security.py`, `dependencies.py`, `core/dependen
 Users log in with **email + password** (case-insensitive match on `users.email`).  
 Exception: the seeded system admin (`is_system = true`) logs in with **username + password** (`users.username`). This is determined at runtime by `is_system`, not hardcoded.
 
+### Account lockout (brute-force protection)
+After `MAX_LOGIN_ATTEMPTS` consecutive failed logins (default 5), the account is locked for `LOCKOUT_MINUTES` (default 15): `users.locked_until = NOW() + LOCKOUT_MINUTES`. While locked, login returns 401 with the remaining minutes **without verifying the password**. The failure counter is incremented atomically (`UPDATE ... SET failed_login_attempts = failed_login_attempts + 1`) to avoid races between concurrent requests, and resets to 0 on successful login.
+
+- **Exempt:** users with `is_system = true` (the seeded admin) never accumulate attempts nor lock — the system can't be left without an administrator by deliberately failing logins.
+- **Auto-expiry:** the lock clears itself after `LOCKOUT_MINUTES`; no admin action required.
+- **Immediate unlock:** `POST /api/users/{id}/activate` and `POST /api/users/{id}/reset-password` also clear `failed_login_attempts`/`locked_until`.
+- **Migration-free:** the two columns are added idempotently at startup (`seed.py::ensure_lockout_columns`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`).
+
 ### Token revocation (two independent paths)
 | Path | Mechanism |
 |------|-----------|
@@ -458,6 +466,8 @@ erDiagram
 | `is_active` | BOOLEAN | NOT NULL | `true` | |
 | `is_system` | BOOLEAN | NOT NULL | `false` | `true` for the seeded admin; allows username-based login |
 | `tokens_valid_after` | TIMESTAMPTZ | nullable | — | JWTs with `iat` before this value are rejected |
+| `failed_login_attempts` | INT | NOT NULL | `0` | Consecutive failed logins; reset on successful login or admin unlock |
+| `locked_until` | TIMESTAMPTZ | nullable | — | Account locked until this time after too many failed logins; `is_system` users never lock |
 | `created_by` | UUID | nullable | — | FK → `users.id` (self-referential) |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Auto-updated by trigger |
@@ -808,7 +818,7 @@ Metadata fields stored per vector:
 ### Auth — `/api/auth`
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/api/auth/login` | — | Login by **email** (or username for `is_system` admin); returns JWT + user info |
+| `POST` | `/api/auth/login` | — | Login by **email** (or username for `is_system` admin); returns JWT + user info. Locks the account for `LOCKOUT_MINUTES` after `MAX_LOGIN_ATTEMPTS` failures (`is_system` exempt) |
 | `POST` | `/api/auth/logout` | Bearer | Revoke current token (inserts JTI into `revoked_tokens`) |
 | `GET` | `/api/auth/me` | Bearer | Current user info |
 
@@ -820,8 +830,8 @@ Metadata fields stored per vector:
 | `POST` | `/api/users` | Admin | Create user with `email`, `password`, `role_id` |
 | `PUT` | `/api/users/{id}` | Admin | Update user fields |
 | `DELETE` | `/api/users/{id}` | Admin | Deactivate user (soft; cannot deactivate own or system account) |
-| `POST` | `/api/users/{id}/activate` | Admin | Reactivate user; sets `tokens_valid_after=NOW()` |
-| `POST` | `/api/users/{id}/reset-password` | Admin | Admin reset password; sets `tokens_valid_after=NOW()` |
+| `POST` | `/api/users/{id}/activate` | Admin | Reactivate user; sets `tokens_valid_after=NOW()`; clears login lockout |
+| `POST` | `/api/users/{id}/reset-password` | Admin | Admin reset password; sets `tokens_valid_after=NOW()`; clears login lockout |
 | `PATCH` | `/api/users/{id}/role` | Admin | Assign or remove role (guards last SUPERADMIN) |
 | `PATCH` | `/api/users/{id}/email` | Admin | Change login email; re-derives `username = email.split("@")[0]`; blocked for `is_system` users |
 
@@ -967,6 +977,8 @@ All variables read from `.env` via Pydantic `Settings` (`backend/app/config.py`)
 | `SECRET_KEY` | `change_in_production` | JWT signing secret (min 32 bytes) |
 | `ALGORITHM` | `HS256` | JWT signing algorithm |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `480` | JWT expiry (8 hours) |
+| `MAX_LOGIN_ATTEMPTS` | `5` | Failed logins before temporary account lockout (`is_system` users exempt) |
+| `LOCKOUT_MINUTES` | `15` | Lockout duration in minutes; auto-expires, or admin unlocks via activate/reset-password |
 | `INITIAL_ADMIN_USERNAME` | `admin` | Seeded system admin username (login by username) |
 | `INITIAL_ADMIN_PASSWORD` | `admin123` | Seeded system admin password |
 
