@@ -1915,6 +1915,116 @@ function DocUserPermsModal({
   );
 }
 
+function BulkUploadModal({
+  files, collections, onClose, onDone, flash,
+}: {
+  files: File[];
+  collections: CollectionOut[];
+  onClose: () => void;
+  onDone: () => void;
+  flash: (msg: string, type?: 'ok' | 'err') => void;
+}) {
+  const [colId, setColId] = useState(''); // '' = sin asignar
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0); // índice 1-based del archivo en curso
+  const [currentName, setCurrentName] = useState('');
+
+  // Sube los archivos uno por uno (igual que la ingesta de a uno: cada POST
+  // dispara su pipeline en background y la cola de inferencia los serializa).
+  // Continúa ante fallos y resume al final.
+  const upload = async () => {
+    setBusy(true);
+    const failed: string[] = [];
+    let ok = 0;
+    for (let i = 0; i < files.length; i++) {
+      setProgress(i + 1);
+      setCurrentName(files[i].name);
+      try {
+        await uploadPgDocument(files[i], colId || null);
+        ok += 1;
+      } catch {
+        failed.push(files[i].name);
+      }
+    }
+    onDone();
+    if (failed.length === 0) {
+      const s = ok === 1 ? '' : 's';
+      flash(`${ok} documento${s} subido${s} — procesando en segundo plano`);
+    } else {
+      const s = ok === 1 ? '' : 's';
+      flash(`${ok} subido${s}, ${failed.length} con error: ${failed.join(', ')}`, 'err');
+    }
+    setBusy(false);
+    onClose();
+  };
+
+  return (
+    <Dialog.Root open onOpenChange={(o) => { if (!o && !busy) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+        <Dialog.Content
+          className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto"
+          style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}
+        >
+          <Dialog.Title
+            className="text-base font-semibold mb-2"
+            style={{ color: 'var(--gold-bright)', fontFamily: 'Playfair Display, serif' }}
+          >
+            Confirmar subida ({files.length})
+          </Dialog.Title>
+          <Dialog.Description className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
+            Elige a qué colección subir {files.length === 1 ? 'el archivo' : 'los archivos'}.
+          </Dialog.Description>
+
+          <ul
+            className="mb-3 space-y-1 max-h-48 overflow-y-auto rounded-lg border p-2"
+            style={{ borderColor: 'var(--border-default)', background: 'var(--bg-surface)' }}
+          >
+            {files.map((f, i) => (
+              <li key={i} className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                <FileText size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                <span className="truncate">{f.name}</span>
+              </li>
+            ))}
+          </ul>
+
+          <Select value={colId} onChange={(e) => setColId(e.target.value)} disabled={busy}>
+            <option value="">Sin asignar — decidir luego</option>
+            {collections.filter((c) => c.is_active).map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </Select>
+
+          {busy && (
+            <p className="text-xs mt-3 flex items-center gap-2" style={{ color: 'var(--text-muted)' }}>
+              <Loader2 size={12} className="animate-spin" />
+              <span className="truncate">Subiendo {progress} de {files.length}: {currentName}</span>
+            </p>
+          )}
+
+          <div className="flex justify-end gap-2 mt-5">
+            <button
+              disabled={busy}
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg text-xs font-medium disabled:opacity-50"
+              style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-surface)' }}
+            >Cancelar</button>
+            <button
+              disabled={busy}
+              onClick={upload}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+              style={{ background: 'var(--gold-bright)', color: '#0A1A10' }}
+            >
+              {busy ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+              Subir {files.length === 1 ? 'documento' : `${files.length} documentos`}
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 function MoveDocModal({
   doc, collections, onClose, onSaved, flash,
 }: {
@@ -2076,9 +2186,7 @@ function DocumentosSection({ canUpload, canDelete }: { canUpload: boolean; canDe
   const [filterStatus, setFilterStatus] = useState<'' | 'ACTIVE' | 'OBSOLETE'>('');
   const [sort, setSort] = useState<PgDocumentsFilters['sort']>('newest');
 
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadColId, setUploadColId] = useState(''); // '' = sin asignar
-  const [uploading, setUploading] = useState(false);
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]); // archivos elegidos → abre el modal de confirmación
   const [downloading, setDownloading] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; type: 'ok' | 'err' } | null>(null);
   const [confirmObsolete, setConfirmObsolete] = useState<PgDocumentOut | null>(null);
@@ -2132,20 +2240,6 @@ function DocumentosSection({ canUpload, canDelete }: { canUpload: boolean; canDe
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
   }, [docs, load]);
-
-  const handleUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!uploadFile) return;
-    setUploading(true);
-    try {
-      await uploadPgDocument(uploadFile, uploadColId || null);
-      setUploadFile(null);
-      setUploadColId('');
-      await load();
-      flash(uploadColId ? 'Documento subido — procesando en segundo plano' : 'Documento subido sin colección — asígnele una luego');
-    } catch (err) { flash(err instanceof Error ? err.message : 'Error al subir', 'err'); }
-    setUploading(false);
-  };
 
   const handleDownload = async (doc: PgDocumentOut) => {
     setDownloading(doc.doc_id);
@@ -2238,39 +2332,43 @@ function DocumentosSection({ canUpload, canDelete }: { canUpload: boolean; canDe
         destructive
         onConfirm={doObsolete}
       />
+      {uploadFiles.length > 0 && (
+        <BulkUploadModal
+          files={uploadFiles}
+          collections={collections}
+          onClose={() => setUploadFiles([])}
+          onDone={load}
+          flash={flash}
+        />
+      )}
 
       {canUpload && (
         <Card>
-          <SectionTitle>Subir Documento</SectionTitle>
-          <form onSubmit={handleUpload} className="grid grid-cols-1 gap-3 max-w-md">
-            <Select
-              value={uploadColId}
-              onChange={(e) => setUploadColId(e.target.value)}
-            >
-              <option value="">Sin asignar — decidir luego</option>
-              {collections.filter((c) => c.is_active).map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </Select>
+          <SectionTitle>Subir Documentos</SectionTitle>
+          <div className="grid grid-cols-1 gap-3 max-w-md">
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Selecciona uno o varios archivos. Luego eliges a qué colección subirlos.
+            </p>
             <div
               className="flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer"
               style={{ borderColor: 'var(--border-default)', background: 'var(--bg-elevated)' }}
               onClick={() => document.getElementById('file-input')?.click()}
             >
               <Upload size={14} style={{ color: 'var(--text-muted)' }} />
-              <span className="text-sm" style={{ color: uploadFile ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                {uploadFile ? uploadFile.name : 'Seleccionar archivo...'}
+              <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                Seleccionar archivos...
               </span>
               <input
-                id="file-input" type="file" className="hidden"
-                onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                id="file-input" type="file" className="hidden" multiple
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  if (files.length) setUploadFiles(files);
+                  e.target.value = ''; // permite volver a elegir los mismos archivos
+                }}
                 accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp"
               />
             </div>
-            <BtnPrimary type="submit" disabled={uploading || !uploadFile}>
-              <Upload size={14} /> {uploading ? 'Subiendo...' : 'Subir Documento'}
-            </BtnPrimary>
-          </form>
+          </div>
         </Card>
       )}
 
