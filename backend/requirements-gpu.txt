@@ -1,0 +1,64 @@
+# ============================================================
+# Entorno GPU (NVIDIA CUDA 12.4) — venv SEPARADO del de CPU
+# ============================================================
+#
+# Tu setup detectado:
+#   GPU:     NVIDIA GeForce RTX 4080 (12 GB VRAM)
+#   Driver:  595.71.05  (soporta hasta CUDA 13.2)
+#   Toolkit: nvcc 12.4  ← determina el tag de los wheels
+#
+# Crear e instalar el venv GPU:
+#
+#   cd backend
+#   python -m venv .venv-gpu
+#   source .venv-gpu/bin/activate
+#   pip install -U pip
+#   pip install -r requirements-gpu.txt
+#
+# Si tienes otro toolkit (nvcc --version) cambia "cu124" por el
+# tag correspondiente: cu118 | cu121 | cu124 | cu128.
+# ============================================================
+
+# --- Índices con wheels CUDA (declarados antes que las deps) ---
+--extra-index-url https://download.pytorch.org/whl/cu124
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
+
+# === Dependencias web / base (idénticas a requirements.txt) ===
+fastapi>=0.115.0
+python-multipart>=0.0.9
+uvicorn[standard]>=0.30.0
+python-dotenv>=1.0.0
+pydantic[email]>=2.7.0
+pydantic-settings>=2.3.0
+sqlalchemy>=2.0.30
+chromadb>=0.5.0
+sse-starlette>=2.1.0
+langchain-text-splitters>=0.2.0
+Pillow>=10.3.0
+pymupdf>=1.24.0
+python-docx>=1.1.0
+python-pptx>=1.0.0
+openpyxl>=3.1.0
+bcrypt>=4.0.1
+python-jose[cryptography]>=3.3.0
+asyncpg>=0.29.0
+alembic>=1.13.0
+tqdm>=4.66.0
+
+# === HuggingFace / inferencia local — builds CUDA ===
+huggingface-hub>=0.24.0
+
+# torch: se resuelve desde pytorch.org/whl/cu124 → build "+cu124"
+# (sin el --extra-index-url tomaría la wheel CPU de PyPI)
+torch>=2.4.0
+
+# sentence-transformers y transformers: no tienen wheel especial de
+# GPU (usan torch por debajo), se instalan desde PyPI normalmente.
+sentence-transformers>=3.0.0
+transformers>=4.45.0
+
+# llama-cpp-python: se resuelve desde abetlen.github.io/whl/cu124
+# → wheel precompilada con GGML_CUDA=on.
+# Con este build, n_gpu_layers>0 offloadea capas a la GPU.
+llama-cpp-python>=0.3.2
+# FlagEmbedding removido — el reranker usa transformers directamente

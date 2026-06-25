@@ -22,6 +22,8 @@ def _compute_scores(query: str, candidates: list[dict]) -> list[float]:
             max_length=512,
             return_tensors="pt",
         )
+        # Mover inputs al mismo device que el modelo (CPU → no-op, CUDA → .to("cuda"))
+        inputs = {k: v.to(model.device) for k, v in inputs.items()}
         logits = model(**inputs, return_dict=True).logits.view(-1).float()
         scores = torch.sigmoid(logits).tolist()
     return scores

@@ -10,6 +10,7 @@ build/
 
 # Virtual environment
 .venv/
+.venv-gpu/
 venv/
 env/
 
@@ -28,7 +29,7 @@ models_cache/
 *.docx
 *.pptx
 *.xlsx
-
+.pytest_cache/
 # Logs
 *.log
 logs/

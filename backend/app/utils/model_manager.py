@@ -20,6 +20,20 @@ _embedder: Any = None     # BGE-M3
 _reranker: Any = None     # BGE-reranker-v2-m3
 
 
+def _resolve_device(settings: Any) -> str:
+    """Resuelve el dispositivo de inferencia desde settings.
+
+    "auto"  → usa CUDA si torch lo detecta, si no CPU.
+    "cuda"  → CUDA explícito (falla en arranque si no hay GPU).
+    "cpu"   → CPU siempre.
+    """
+    dev = settings.inference_device.lower()
+    if dev == "auto":
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    return dev  # "cpu" | "cuda"
+
+
 def _load_all_sync() -> None:
     global _vision_llm, _chat_llm, _embedder, _reranker
 
@@ -31,10 +45,17 @@ def _load_all_sync() -> None:
     from huggingface_hub import hf_hub_download
     from llama_cpp import Llama
 
+    device = _resolve_device(settings)
+    n_gpu_layers = settings.llm_n_gpu_layers if device == "cuda" else 0
+
     total_cores = os.cpu_count() or 4
     n_threads = settings.llm_n_threads or max(1, total_cores - 2)
 
     logger.info("=" * 60)
+    if device == "cuda":
+        logger.info("⚡ Dispositivo de inferencia: CUDA (n_gpu_layers=%d)", n_gpu_layers)
+    else:
+        logger.info("💻 Dispositivo de inferencia: CPU")
     logger.info("[1/4] LLM Visión (Gemma-4) — %s", settings.llm_gguf_repo)
 
     try:
@@ -78,6 +99,7 @@ def _load_all_sync() -> None:
         n_batch=2048,        # mismo que el chat — prefill en un solo lote para imágenes de 272 tokens
         n_threads=n_threads,
         n_threads_batch=n_threads,
+        n_gpu_layers=n_gpu_layers,  # 0 en CPU, -1 (todas) en CUDA
         use_mmap=False,
         use_mlock=True,
         verbose=False,
@@ -105,9 +127,10 @@ def _load_all_sync() -> None:
     _chat_llm = Llama(
         model_path=chat_path,
         n_ctx=settings.chat_n_ctx,
-        n_batch=2048,   # prefill en menos lotes -> mejor throughput de CPU (menor TTFT)
+        n_batch=2048,   # prefill en menos lotes -> mejor throughput (menor TTFT)
         n_threads=n_threads,
         n_threads_batch=n_threads,
+        n_gpu_layers=n_gpu_layers,  # 0 en CPU, -1 (todas) en CUDA
         use_mmap=False,
         use_mlock=True,
         verbose=False,
@@ -125,7 +148,7 @@ def _load_all_sync() -> None:
             "Ejecuta primero: python download_models.py"
         )
 
-    _embedder = SentenceTransformer(str(embed_path), device="cpu")
+    _embedder = SentenceTransformer(str(embed_path), device=device)
 
     test_vec = _embedder.encode("test", normalize_embeddings=True)
     actual_dim = len(test_vec)
@@ -149,10 +172,16 @@ def _load_all_sync() -> None:
         )
 
     reranker_tokenizer = AutoTokenizer.from_pretrained(str(reranker_path))
-    # CPU-only: fp16 no mejora rendimiento en CPU, usar float32 siempre
-    reranker_model = AutoModelForSequenceClassification.from_pretrained(
-        str(reranker_path), dtype=torch.float32
+    # En GPU usamos fp16 si reranker_use_fp16=True (menos VRAM, más rápido).
+    # En CPU siempre float32 (fp16 no tiene ventaja en CPU).
+    rerank_dtype = (
+        torch.float16
+        if (device == "cuda" and settings.reranker_use_fp16)
+        else torch.float32
     )
+    reranker_model = AutoModelForSequenceClassification.from_pretrained(
+        str(reranker_path), torch_dtype=rerank_dtype
+    ).to(device)
     reranker_model.eval()
     _reranker = (reranker_tokenizer, reranker_model)
     logger.info("      BGE-reranker-v2-m3 listo.")

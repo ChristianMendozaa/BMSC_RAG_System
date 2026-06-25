@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     # HuggingFace model cache
     hf_cache_dir: str = "./models_cache"
 
+    # Dispositivo de inferencia para los 4 modelos: "cpu" | "cuda" | "auto".
+    # "auto" usa GPU si torch.cuda.is_available(). Default "cpu" — el venv de GPU
+    # debe setear INFERENCE_DEVICE=cuda explícitamente (ver requirements-gpu.txt).
+    inference_device: str = "cpu"
+    # Solo aplica cuando el device resuelve a "cuda". -1 = offload de TODAS las
+    # capas de los GGUF (Gemma/Llama) a la GPU. 0 equivale a CPU.
+    llm_n_gpu_layers: int = -1
+
     # LLM de visión: Gemma-4 GGUF — SOLO para captioning de imágenes durante la ingesta
     llm_gguf_repo: str = "bartowski/google_gemma-4-E4B-it-GGUF"
     llm_gguf_filename: str = "google_gemma-4-E4B-it-Q4_K_M.gguf"
@@ -42,8 +50,10 @@ class Settings(BaseSettings):
     chat_top_k: int = 40
     chat_repeat_penalty: float = 1.1
 
-    # Reranker: BGE-reranker-v2-m3 vía FlagEmbedding (cross-encoder, fuera de inference_queue)
+    # Reranker: BGE-reranker-v2-m3 vía transformers (cross-encoder, fuera de inference_queue)
     reranker_model_id: str = "BAAI/bge-reranker-v2-m3"
+    # Solo aplica cuando inference_device=="cuda": usa fp16 para reducir VRAM y mejorar
+    # throughput. En CPU siempre se usa float32 (fp16 no tiene ventaja allí).
     reranker_use_fp16: bool = True
 
     # Embeddings: BGE-M3 — recuperación simétrica, sin prefijos query:/passage:
