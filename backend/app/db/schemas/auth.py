@@ -50,3 +50,13 @@ class VerifyFirstLoginRequest(BaseModel):
     password: str
     code: str
     new_password: str
+
+
+class RequestPasswordResetRequest(BaseModel):
+    identifier: str
+
+
+class ConfirmPasswordResetRequest(BaseModel):
+    identifier: str
+    code: str
+    new_password: str

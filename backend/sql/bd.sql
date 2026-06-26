@@ -51,6 +51,13 @@ CREATE TABLE users (
     tokens_valid_after  TIMESTAMPTZ,
     failed_login_attempts INT        NOT NULL DEFAULT 0,
     locked_until        TIMESTAMPTZ,
+    must_change_password BOOLEAN     NOT NULL DEFAULT false,
+    verification_code   VARCHAR(10),
+    verification_code_hash VARCHAR(255),
+    verification_code_expires_at TIMESTAMPTZ,
+    verification_code_attempts INT   NOT NULL DEFAULT 0,
+    verification_code_sent_at TIMESTAMPTZ,
+    verification_code_purpose VARCHAR(32),
     created_by          UUID         REFERENCES users(id) ON DELETE SET NULL,
     created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()

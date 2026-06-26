@@ -80,14 +80,13 @@ async def create_user(
         await db.refresh(new_user)
         user = await db.scalar(select(PGUser).where(PGUser.id == new_user.id))
 
-        # Notificación de bienvenida con credenciales iniciales (best-effort)
+        # Notificación de bienvenida sin incluir contraseñas (best-effort)
         if user and user.email:
             role_name = user.role.name if user.role else None
             asyncio.create_task(
                 notify_account_created(
                     to_addr=user.email,
                     username=user.username,
-                    temp_password=body.password,
                     role_name=role_name,
                 )
             )
@@ -241,6 +240,13 @@ async def reset_user_password(
     user.tokens_valid_after = datetime.now(timezone.utc)
     user.failed_login_attempts = 0
     user.locked_until = None
+    user.must_change_password = True
+    user.verification_code = None
+    user.verification_code_hash = None
+    user.verification_code_expires_at = None
+    user.verification_code_attempts = 0
+    user.verification_code_sent_at = None
+    user.verification_code_purpose = None
     await db.commit()
 
     # Notificación de reset de contraseña (best-effort)
@@ -249,7 +255,6 @@ async def reset_user_password(
             notify_password_reset(
                 to_addr=user.email,
                 username=user.username,
-                new_password=body.new_password,
                 reset_by=current_user.username,
             )
         )

@@ -1,6 +1,5 @@
 import asyncio
-import random
-import string
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -19,12 +18,64 @@ from app.db.schemas.auth import (
     UserInfo,
     SendVerificationCodeRequest,
     VerifyFirstLoginRequest,
+    RequestPasswordResetRequest,
+    ConfirmPasswordResetRequest,
 )
 from app.db.session import get_pg_db
 from app.dependencies import get_current_user, oauth2_scheme
-from app.services.email_service import notify_account_locked, notify_verification_code
+from app.services.email_service import (
+    notify_account_locked,
+    notify_password_reset_code,
+    notify_verification_code,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+CODE_EXPIRY_MINUTES = 15
+CODE_RESEND_COOLDOWN_SECONDS = 60
+MAX_CODE_ATTEMPTS = 5
+PURPOSE_FIRST_LOGIN = "first_login"
+PURPOSE_PASSWORD_RESET = "password_reset"
+
+
+def _make_code() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def _clear_verification_code(user: PGUser) -> None:
+    user.verification_code = None
+    user.verification_code_hash = None
+    user.verification_code_expires_at = None
+    user.verification_code_attempts = 0
+    user.verification_code_sent_at = None
+    user.verification_code_purpose = None
+
+
+def _set_verification_code(user: PGUser, code: str, purpose: str, now: datetime) -> None:
+    user.verification_code = None
+    user.verification_code_hash = get_password_hash(code)
+    user.verification_code_expires_at = now + timedelta(minutes=CODE_EXPIRY_MINUTES)
+    user.verification_code_attempts = 0
+    user.verification_code_sent_at = now
+    user.verification_code_purpose = purpose
+
+
+def _cooldown_active(user: PGUser, now: datetime) -> bool:
+    if user.verification_code_sent_at is None:
+        return False
+    return user.verification_code_sent_at + timedelta(seconds=CODE_RESEND_COOLDOWN_SECONDS) > now
+
+
+def _validate_verification_code(user: PGUser, code: str, purpose: str, now: datetime) -> None:
+    if user.verification_code_purpose != purpose or not user.verification_code_hash:
+        raise HTTPException(status_code=400, detail="Código de verificación incorrecto")
+    if not user.verification_code_expires_at or user.verification_code_expires_at < now:
+        raise HTTPException(status_code=400, detail="El código de verificación ha expirado")
+    if user.verification_code_attempts >= MAX_CODE_ATTEMPTS:
+        raise HTTPException(status_code=400, detail="Demasiados intentos. Solicite un nuevo código")
+    if not verify_password(code, user.verification_code_hash):
+        user.verification_code_attempts += 1
+        raise HTTPException(status_code=400, detail="Código de verificación incorrecto")
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -179,18 +230,24 @@ async def send_verification_code(
     if not user.email:
         raise HTTPException(status_code=400, detail="El usuario no tiene correo registrado")
 
-    code = "".join(random.choices(string.digits, k=6))
-    user.verification_code = code
-    user.verification_code_expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    now = datetime.now(timezone.utc)
+    if _cooldown_active(user, now):
+        raise HTTPException(status_code=429, detail="Espere antes de solicitar otro código")
+
+    code = _make_code()
+    _set_verification_code(user, code, PURPOSE_FIRST_LOGIN, now)
     await db.commit()
 
-    asyncio.create_task(
-        notify_verification_code(
-            to_addr=user.email,
-            username=user.username,
-            code=code,
-        )
+    sent = await notify_verification_code(
+        to_addr=user.email,
+        username=user.username,
+        code=code,
+        expires_minutes=CODE_EXPIRY_MINUTES,
     )
+    if not sent:
+        _clear_verification_code(user)
+        await db.commit()
+        raise HTTPException(status_code=503, detail="No se pudo enviar el código de verificación")
 
 
 @router.post("/verify-first-login", response_model=LoginResponse)
@@ -209,12 +266,12 @@ async def verify_first_login(
     if not getattr(user, "must_change_password", False):
         raise HTTPException(status_code=400, detail="El usuario no requiere cambio de contraseña")
 
-    if not user.verification_code or user.verification_code != body.code:
-        raise HTTPException(status_code=400, detail="Código de verificación incorrecto")
-
     now = datetime.now(timezone.utc)
-    if not user.verification_code_expires_at or user.verification_code_expires_at < now:
-        raise HTTPException(status_code=400, detail="El código de verificación ha expirado")
+    try:
+        _validate_verification_code(user, body.code, PURPOSE_FIRST_LOGIN, now)
+    except HTTPException:
+        await db.commit()
+        raise
 
     if len(body.new_password) < 4:
         raise HTTPException(status_code=400, detail="La nueva contraseña debe tener al menos 4 caracteres")
@@ -222,12 +279,85 @@ async def verify_first_login(
     # Todo correcto: cambiar password y limpiar el requerimiento
     user.hashed_password = get_password_hash(body.new_password)
     user.must_change_password = False
-    user.verification_code = None
-    user.verification_code_expires_at = None
+    _clear_verification_code(user)
     user.tokens_valid_after = now
     await db.commit()
 
     # Generar token y loguear automáticamente
+    jti = uuid.uuid4()
+    token = create_access_token(user_id=user.id, jti=jti)
+    return LoginResponse(
+        access_token=token,
+        token_type="bearer",
+        user=UserInfo.model_validate(user),
+    )
+
+
+@router.post("/request-password-reset", status_code=204)
+async def request_password_reset(
+    body: RequestPasswordResetRequest,
+    db: AsyncSession = Depends(get_pg_db),
+):
+    """Envía un código de recuperación sin revelar si el correo existe."""
+    ident = body.identifier.strip()
+    now = datetime.now(timezone.utc)
+    user = await db.scalar(
+        select(PGUser).where(func.lower(PGUser.email) == ident.lower())
+    )
+
+    if not user or not user.email or not user.is_active:
+        return
+
+    if _cooldown_active(user, now):
+        return
+
+    code = _make_code()
+    _set_verification_code(user, code, PURPOSE_PASSWORD_RESET, now)
+    await db.commit()
+
+    sent = await notify_password_reset_code(
+        to_addr=user.email,
+        username=user.username,
+        code=code,
+        expires_minutes=CODE_EXPIRY_MINUTES,
+    )
+    if not sent:
+        _clear_verification_code(user)
+        await db.commit()
+        raise HTTPException(status_code=503, detail="No se pudo enviar el código de recuperación")
+
+
+@router.post("/confirm-password-reset", response_model=LoginResponse)
+async def confirm_password_reset(
+    body: ConfirmPasswordResetRequest,
+    db: AsyncSession = Depends(get_pg_db),
+):
+    """Valida el código enviado por correo y define una nueva contraseña."""
+    ident = body.identifier.strip()
+    user = await db.scalar(
+        select(PGUser).where(func.lower(PGUser.email) == ident.lower())
+    )
+    if not user or not user.email or not user.is_active:
+        raise HTTPException(status_code=400, detail="Código de verificación incorrecto")
+
+    now = datetime.now(timezone.utc)
+    try:
+        _validate_verification_code(user, body.code, PURPOSE_PASSWORD_RESET, now)
+    except HTTPException:
+        await db.commit()
+        raise
+
+    if len(body.new_password) < 4:
+        raise HTTPException(status_code=400, detail="La nueva contraseña debe tener al menos 4 caracteres")
+
+    user.hashed_password = get_password_hash(body.new_password)
+    user.must_change_password = False
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    user.tokens_valid_after = now
+    _clear_verification_code(user)
+    await db.commit()
+
     jti = uuid.uuid4()
     token = create_access_token(user_id=user.id, jti=jti)
     return LoginResponse(

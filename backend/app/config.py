@@ -1,9 +1,13 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=BACKEND_DIR / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -95,14 +99,15 @@ class Settings(BaseSettings):
     initial_admin_username: str = "admin"
     initial_admin_password: str = "admin123"
 
-    # ── SMTP (relay interno del banco, sin TLS ni AUTH) ──────────────────────
+    # ── SMTP (relay interno del banco, sin TLS, STARTTLS ni AUTH) ────────────
     # Todos los valores pueden sobreescribirse desde el .env con el prefijo
-    # SMTP_HOST, SMTP_PORT, etc.
-    smtp_host: str = "172.16.17.171"
+    # SMTP_HOST, SMTP_PORT, etc. SMTP_FROM debe ser la casilla remitente
+    # autorizada por el relay; no es una credencial de autenticación.
+    smtp_host: str = ""
     smtp_port: int = 25
-    smtp_from: str = "noreply@banco.com"
+    smtp_from: str = ""
     smtp_timeout: int = 10          # segundos; evita bloquear el startup si el relay no responde
-    smtp_enabled: bool = True       # False → las notificaciones se loguan pero no se envían
+    smtp_enabled: bool = False      # False → las notificaciones se loguan pero no se envían
 
 
 settings = Settings()

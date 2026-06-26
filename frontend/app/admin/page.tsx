@@ -208,7 +208,7 @@ function ResetPasswordModal({
     setBusy(true);
     try {
       await resetUserPassword(user.id, pw);
-      flash(`Contraseña actualizada para ${user.username}. Sus sesiones activas fueron cerradas.`);
+      flash(`Contraseña temporal actualizada para ${user.username}. Deberá cambiarla al iniciar sesión.`);
       onDone();
       onClose();
     } catch (err) {
@@ -232,7 +232,7 @@ function ResetPasswordModal({
             Cambiar contraseña
           </Dialog.Title>
           <Dialog.Description className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
-            Nueva contraseña para <strong>{user.username}</strong>. Esto cerrará todas las sesiones activas del usuario.
+            Contraseña temporal para <strong>{user.username}</strong>. Esto cerrará sus sesiones activas y obligará cambio en el próximo ingreso.
           </Dialog.Description>
           <div className="space-y-2">
             <div className="relative">
@@ -272,7 +272,7 @@ function ResetPasswordModal({
               style={{ background: 'var(--gold-bright)', color: '#0A1A10' }}
             >
               {busy && <Loader2 size={12} className="animate-spin" />}
-              Guardar contraseña
+              Guardar contraseña temporal
             </button>
           </div>
         </Dialog.Content>

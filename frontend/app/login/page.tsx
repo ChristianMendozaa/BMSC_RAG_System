@@ -4,7 +4,15 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Eye, EyeOff } from 'lucide-react';
-import { login, sendVerificationCode, verifyFirstLogin, MustChangePasswordError } from '@/lib/api';
+import {
+  confirmPasswordReset,
+  login,
+  requestPasswordReset,
+  sendVerificationCode,
+  verifyFirstLogin,
+  MustChangePasswordError,
+} from '@/lib/api';
+import type { LoginResponse } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 export default function LoginPage() {
@@ -14,6 +22,13 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotStep, setForgotStep] = useState<'request' | 'confirm'>('request');
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotCode, setForgotCode] = useState('');
+  const [forgotPassword, setForgotPassword] = useState('');
+  const [forgotPassword2, setForgotPassword2] = useState('');
+  const [forgotError, setForgotError] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
   
   // First login state
   const [step, setStep] = useState<'login' | 'verify'>('login');
@@ -61,7 +76,7 @@ export default function LoginPage() {
     }
   };
 
-  const finishLogin = async (data: any) => {
+  const finishLogin = async (data: LoginResponse) => {
     localStorage.setItem('access_token', data.access_token);
     localStorage.setItem('user', JSON.stringify(data.user));
     await refetch();
@@ -71,6 +86,62 @@ export default function LoginPage() {
       router.push('/admin');
     } else {
       router.push('/chat');
+    }
+  };
+
+  const resetForgotState = () => {
+    setForgotStep('request');
+    setForgotEmail('');
+    setForgotCode('');
+    setForgotPassword('');
+    setForgotPassword2('');
+    setForgotError('');
+    setForgotLoading(false);
+  };
+
+  const handleRequestReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await sendPasswordResetCode();
+  };
+
+  const sendPasswordResetCode = async () => {
+    setForgotError('');
+    setForgotLoading(true);
+    try {
+      await requestPasswordReset(forgotEmail.trim().toLowerCase());
+      setForgotStep('confirm');
+    } catch (err: unknown) {
+      setForgotError(err instanceof Error ? err.message : 'Error al enviar el código');
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const handleConfirmReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotError('');
+    if (forgotPassword.length < 4) {
+      setForgotError('La nueva contraseña debe tener al menos 4 caracteres');
+      return;
+    }
+    if (forgotPassword !== forgotPassword2) {
+      setForgotError('Las contraseñas no coinciden');
+      return;
+    }
+    setForgotLoading(true);
+    try {
+      const data = await confirmPasswordReset(
+        forgotEmail.trim().toLowerCase(),
+        forgotCode,
+        forgotPassword,
+      );
+      setForgotOpen(false);
+      resetForgotState();
+      await finishLogin(data);
+    } catch (err: unknown) {
+      setForgotError(err instanceof Error ? err.message : 'Error al recuperar contraseña');
+    } finally {
+      setForgotLoading(false);
     }
   };
 
@@ -246,7 +317,14 @@ export default function LoginPage() {
         </form>
       </div>
 
-      <Dialog.Root open={forgotOpen} onOpenChange={setForgotOpen}>
+      <Dialog.Root
+        open={forgotOpen}
+        onOpenChange={(open) => {
+          setForgotOpen(open);
+          if (!open) resetForgotState();
+          if (open) setForgotEmail(identifier.trim().toLowerCase());
+        }}
+      >
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
           <Dialog.Content
@@ -259,20 +337,139 @@ export default function LoginPage() {
             >
               Recuperar contraseña
             </Dialog.Title>
-            <Dialog.Description className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-              Por seguridad, las contraseñas no se pueden recuperar desde aquí.
-              Comuníquese con el <strong>encargado del sistema</strong> para que reestablezca su contraseña.
+            <Dialog.Description className="text-sm leading-relaxed mb-4" style={{ color: 'var(--text-secondary)' }}>
+              {forgotStep === 'request'
+                ? 'Ingrese su correo para recibir un código de recuperación.'
+                : 'Ingrese el código recibido y defina una nueva contraseña.'}
             </Dialog.Description>
-            <div className="flex justify-end mt-5">
-              <Dialog.Close asChild>
+
+            {forgotError && (
+              <div className="mb-4 p-3 rounded bg-red-900/50 text-red-200 border border-red-800 text-sm">
+                {forgotError}
+              </div>
+            )}
+
+            {forgotStep === 'request' ? (
+              <form onSubmit={handleRequestReset} className="space-y-3">
+                <input
+                  type="email"
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                  required
+                  autoComplete="email"
+                  placeholder="correo@bmsc.com.bo"
+                  className="w-full px-4 py-2 rounded border focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                  style={{
+                    background: 'var(--bg-surface)',
+                    borderColor: 'var(--border-default)',
+                    color: 'white',
+                  }}
+                />
+                <div className="flex justify-end gap-2 mt-5">
+                  <Dialog.Close asChild>
+                    <button
+                      type="button"
+                      disabled={forgotLoading}
+                      className="px-4 py-2 rounded-lg text-xs font-medium disabled:opacity-50"
+                      style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-surface)' }}
+                    >
+                      Cancelar
+                    </button>
+                  </Dialog.Close>
+                  <button
+                    type="submit"
+                    disabled={forgotLoading}
+                    className="px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+                    style={{ background: 'var(--gold-bright)', color: '#0A1A10' }}
+                  >
+                    {forgotLoading ? 'Enviando...' : 'Enviar código'}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handleConfirmReset} className="space-y-3">
+                <input
+                  type="text"
+                  value={forgotCode}
+                  onChange={(e) => setForgotCode(e.target.value)}
+                  required
+                  maxLength={6}
+                  placeholder="Código de 6 dígitos"
+                  className="w-full px-4 py-2 rounded border focus:outline-none focus:ring-1 focus:ring-yellow-500 text-center tracking-widest"
+                  style={{
+                    background: 'var(--bg-surface)',
+                    borderColor: 'var(--border-default)',
+                    color: 'var(--gold-bright)',
+                  }}
+                />
+                <input
+                  type="password"
+                  value={forgotPassword}
+                  onChange={(e) => setForgotPassword(e.target.value)}
+                  required
+                  autoComplete="new-password"
+                  placeholder="Nueva contraseña"
+                  className="w-full px-4 py-2 rounded border focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                  style={{
+                    background: 'var(--bg-surface)',
+                    borderColor: 'var(--border-default)',
+                    color: 'white',
+                  }}
+                />
+                <input
+                  type="password"
+                  value={forgotPassword2}
+                  onChange={(e) => setForgotPassword2(e.target.value)}
+                  required
+                  autoComplete="new-password"
+                  placeholder="Repetir nueva contraseña"
+                  className="w-full px-4 py-2 rounded border focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                  style={{
+                    background: 'var(--bg-surface)',
+                    borderColor: 'var(--border-default)',
+                    color: 'white',
+                  }}
+                />
+                <div className="flex justify-between gap-2 mt-5">
+                  <button
+                    type="button"
+                    disabled={forgotLoading}
+                    onClick={() => {
+                      setForgotStep('request');
+                      setForgotCode('');
+                      setForgotPassword('');
+                      setForgotPassword2('');
+                      setForgotError('');
+                    }}
+                    className="px-4 py-2 rounded-lg text-xs font-medium disabled:opacity-50"
+                    style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-surface)' }}
+                  >
+                    Volver
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={forgotLoading}
+                    className="px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+                    style={{ background: 'var(--gold-bright)', color: '#0A1A10' }}
+                  >
+                    {forgotLoading ? 'Procesando...' : 'Cambiar contraseña'}
+                  </button>
+                </div>
+              </form>
+            )}
+            {forgotStep === 'confirm' && (
+              <div className="flex justify-end mt-3">
                 <button
-                  className="px-4 py-2 rounded-lg text-xs font-semibold"
-                  style={{ background: 'var(--gold-bright)', color: '#0A1A10' }}
+                  type="button"
+                  disabled={forgotLoading}
+                  onClick={sendPasswordResetCode}
+                  className="text-xs underline disabled:opacity-50"
+                  style={{ color: 'var(--text-secondary)' }}
                 >
-                  Entendido
+                  Reenviar código
                 </button>
-              </Dialog.Close>
-            </div>
+              </div>
+            )}
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

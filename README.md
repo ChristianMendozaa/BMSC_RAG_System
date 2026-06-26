@@ -468,6 +468,13 @@ erDiagram
 | `tokens_valid_after` | TIMESTAMPTZ | nullable | — | JWTs with `iat` before this value are rejected |
 | `failed_login_attempts` | INT | NOT NULL | `0` | Consecutive failed logins; reset on successful login or admin unlock |
 | `locked_until` | TIMESTAMPTZ | nullable | — | Account locked until this time after too many failed logins; `is_system` users never lock |
+| `must_change_password` | BOOLEAN | NOT NULL | `false` | Forces first-login/admin-reset password change |
+| `verification_code` | VARCHAR(10) | nullable | — | Legacy compatibility only; new codes are not stored in clear text |
+| `verification_code_hash` | VARCHAR(255) | nullable | — | bcrypt hash for first-login/password-reset code |
+| `verification_code_expires_at` | TIMESTAMPTZ | nullable | — | Code expiry |
+| `verification_code_attempts` | INT | NOT NULL | `0` | Failed code verification attempts |
+| `verification_code_sent_at` | TIMESTAMPTZ | nullable | — | Last code send time for cooldown |
+| `verification_code_purpose` | VARCHAR(32) | nullable | — | `first_login` or `password_reset` |
 | `created_by` | UUID | nullable | — | FK → `users.id` (self-referential) |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Auto-updated by trigger |
@@ -819,6 +826,10 @@ Metadata fields stored per vector:
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `POST` | `/api/auth/login` | — | Login by **email** (or username for `is_system` admin); returns JWT + user info. Locks the account for `LOCKOUT_MINUTES` after `MAX_LOGIN_ATTEMPTS` failures (`is_system` exempt) |
+| `POST` | `/api/auth/send-verification-code` | — | Send first-login password-change code after validating temporary credentials |
+| `POST` | `/api/auth/verify-first-login` | — | Verify first-login code, set new password, and return JWT |
+| `POST` | `/api/auth/request-password-reset` | — | Send password-reset code by email without revealing account existence |
+| `POST` | `/api/auth/confirm-password-reset` | — | Verify reset code, set new password, and return JWT |
 | `POST` | `/api/auth/logout` | Bearer | Revoke current token (inserts JTI into `revoked_tokens`) |
 | `GET` | `/api/auth/me` | Bearer | Current user info |
 
@@ -831,7 +842,7 @@ Metadata fields stored per vector:
 | `PUT` | `/api/users/{id}` | Admin | Update user fields |
 | `DELETE` | `/api/users/{id}` | Admin | Deactivate user (soft; cannot deactivate own or system account) |
 | `POST` | `/api/users/{id}/activate` | Admin | Reactivate user; sets `tokens_valid_after=NOW()`; clears login lockout |
-| `POST` | `/api/users/{id}/reset-password` | Admin | Admin reset password; sets `tokens_valid_after=NOW()`; clears login lockout |
+| `POST` | `/api/users/{id}/reset-password` | Admin | Admin sets a temporary password; invalidates sessions, clears lockout, and forces password change |
 | `PATCH` | `/api/users/{id}/role` | Admin | Assign or remove role (guards last SUPERADMIN) |
 | `PATCH` | `/api/users/{id}/email` | Admin | Change login email; re-derives `username = email.split("@")[0]`; blocked for `is_system` users |
 
@@ -981,6 +992,18 @@ All variables read from `.env` via Pydantic `Settings` (`backend/app/config.py`)
 | `LOCKOUT_MINUTES` | `15` | Lockout duration in minutes; auto-expires, or admin unlocks via activate/reset-password |
 | `INITIAL_ADMIN_USERNAME` | `admin` | Seeded system admin username (login by username) |
 | `INITIAL_ADMIN_PASSWORD` | `admin123` | Seeded system admin password |
+| `SMTP_HOST` | — | Internal bank SMTP relay host; configure in `backend/.env` |
+| `SMTP_PORT` | `25` | Internal relay port; plain SMTP |
+| `SMTP_FROM` | — | Authorized sender address shown as email remitente; configure in `backend/.env` |
+| `SMTP_TIMEOUT` | `10` | SMTP network timeout in seconds |
+| `SMTP_ENABLED` | `true` | `false` logs email actions without contacting the relay |
+
+Manual relay check from the VM:
+
+```bash
+python3 backend/tests/smtp_email_check.py --to user@example.com
+python3 backend/tests/smtp_email_check.py --to user@example.com --dry-run
+```
 
 ### Performance Logging
 | Variable | Default | Description |

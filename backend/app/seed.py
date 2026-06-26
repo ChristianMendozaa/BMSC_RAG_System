@@ -12,20 +12,28 @@ logger = logging.getLogger(__name__)
 
 # Migración in-place para BDs existentes (bd.sql ya las trae en instalaciones nuevas).
 # ADD COLUMN IF NOT EXISTS es idempotente: seguro de ejecutar en cada arranque.
-_LOCKOUT_DDL = (
+_USER_AUTH_DDL = (
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INT NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_code VARCHAR(10)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_code_hash VARCHAR(255)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_code_expires_at TIMESTAMPTZ",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_code_attempts INT NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_code_sent_at TIMESTAMPTZ",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_code_purpose VARCHAR(32)",
 )
 
 
-async def ensure_lockout_columns(db: AsyncSession) -> None:
-    for stmt in _LOCKOUT_DDL:
+async def ensure_user_auth_columns(db: AsyncSession) -> None:
+    for stmt in _USER_AUTH_DDL:
         await db.execute(text(stmt))
     await db.commit()
-    logger.info("✓ Columnas de bloqueo de login verificadas")
+    logger.info("✓ Columnas de autenticación de usuarios verificadas")
+
+
+async def ensure_lockout_columns(db: AsyncSession) -> None:
+    await ensure_user_auth_columns(db)
 
 
 # Tablas con FK created_by → users(id) que deben ser ON DELETE SET NULL

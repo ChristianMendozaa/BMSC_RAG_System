@@ -41,8 +41,20 @@ class PGUser(PGBase):
     verification_code: Mapped[str | None] = mapped_column(
         String(10), nullable=True
     )
+    verification_code_hash: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
     verification_code_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    verification_code_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    verification_code_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    verification_code_purpose: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

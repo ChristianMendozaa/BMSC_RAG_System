@@ -143,6 +143,29 @@ export async function verifyFirstLogin(identifier: string, password: string, cod
   return res.json() as Promise<LoginResponse>;
 }
 
+export async function requestPasswordReset(identifier: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/auth/request-password-reset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier }),
+  });
+  return handleResponse<void>(res);
+}
+
+export async function confirmPasswordReset(identifier: string, code: string, newPassword: string): Promise<LoginResponse> {
+  const res = await fetch(`${API_URL}/api/auth/confirm-password-reset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier, code, new_password: newPassword }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: '' }));
+    const detail = (err as { detail?: string }).detail;
+    throw new Error(detail || `Error al recuperar contraseña: ${res.status}`);
+  }
+  return res.json() as Promise<LoginResponse>;
+}
+
 export async function logout(): Promise<void> {
   try {
     await fetch(`${API_URL}/api/auth/logout`, {
