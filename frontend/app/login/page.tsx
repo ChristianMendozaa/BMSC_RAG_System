@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Eye, EyeOff } from 'lucide-react';
-import { login } from '@/lib/api';
+import { login, sendVerificationCode, verifyFirstLogin, MustChangePasswordError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 export default function LoginPage() {
@@ -14,6 +14,12 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
+  
+  // First login state
+  const [step, setStep] = useState<'login' | 'verify'>('login');
+  const [verificationCode, setVerificationCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  
   const router = useRouter();
   const { refetch } = useAuth();
 
@@ -22,23 +28,49 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
 
-    try {
-      const data = await login(identifier, password);
-      localStorage.setItem('access_token', data.access_token);
-      localStorage.setItem('user', JSON.stringify(data.user));
-      await refetch();
-
-      const role = data.user.role;
-      if (role && (role.can_manage_users || role.can_manage_collections || role.can_upload_documents)) {
-        router.push('/admin');
-      } else {
-        router.push('/chat');
+    if (step === 'login') {
+      try {
+        const data = await login(identifier, password);
+        await finishLogin(data);
+      } catch (err: unknown) {
+        if (err instanceof MustChangePasswordError) {
+          try {
+            await sendVerificationCode(identifier, password);
+            setStep('verify');
+            setError('');
+          } catch (sendErr: unknown) {
+            setError(sendErr instanceof Error ? sendErr.message : 'Error al enviar el código');
+          }
+        } else {
+          setError(err instanceof Error ? err.message : 'Error al iniciar sesión');
+          setPassword('');
+        }
+      } finally {
+        setLoading(false);
       }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Error al iniciar sesión');
-      setPassword('');
-    } finally {
-      setLoading(false);
+    } else {
+      // step === 'verify'
+      try {
+        const data = await verifyFirstLogin(identifier, password, verificationCode, newPassword);
+        await finishLogin(data);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Error al verificar');
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  const finishLogin = async (data: any) => {
+    localStorage.setItem('access_token', data.access_token);
+    localStorage.setItem('user', JSON.stringify(data.user));
+    await refetch();
+
+    const role = data.user.role;
+    if (role && (role.can_manage_users || role.can_manage_collections || role.can_upload_documents)) {
+      router.push('/admin');
+    } else {
+      router.push('/chat');
     }
   };
 
@@ -65,54 +97,112 @@ export default function LoginPage() {
         )}
 
         <form onSubmit={handleLogin} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium mb-1 text-gray-300">Correo electrónico</label>
-            <input
-              type="text"
-              value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
-              required
-              autoComplete="email"
-              placeholder="correo@bmsc.com.bo"
-              className="w-full px-4 py-2 rounded border focus:outline-none focus:ring-1 focus:ring-yellow-500"
-              style={{
-                background: 'var(--bg-elevated)',
-                borderColor: 'var(--border-default)',
-                color: 'white',
-              }}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1 text-gray-300">Contraseña</label>
-            <div className="relative">
-              <input
-                type={showPassword ? 'text' : 'password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                autoComplete="current-password"
-                className="w-full px-4 py-2 rounded border focus:outline-none focus:ring-1 focus:ring-yellow-500"
-                style={{
-                  background: 'var(--bg-elevated)',
-                  borderColor: 'var(--border-default)',
-                  color: 'white',
-                  paddingRight: 40,
-                }}
-              />
-              <button
-                type="button"
-                tabIndex={-1}
-                onClick={() => setShowPassword((v) => !v)}
-                aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
-                className="absolute right-3 top-1/2 -translate-y-1/2 transition-colors"
-                style={{ color: 'var(--text-secondary)' }}
-                onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--gold-bright)')}
-                onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-secondary)')}
-              >
-                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-          </div>
+          {step === 'login' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium mb-1 text-gray-300">Correo electrónico</label>
+                <input
+                  type="text"
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
+                  required
+                  autoComplete="email"
+                  placeholder="correo@bmsc.com.bo"
+                  className="w-full px-4 py-2 rounded border focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                  style={{
+                    background: 'var(--bg-elevated)',
+                    borderColor: 'var(--border-default)',
+                    color: 'white',
+                  }}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1 text-gray-300">Contraseña</label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    autoComplete="current-password"
+                    className="w-full px-4 py-2 rounded border focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                    style={{
+                      background: 'var(--bg-elevated)',
+                      borderColor: 'var(--border-default)',
+                      color: 'white',
+                      paddingRight: 40,
+                    }}
+                  />
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => setShowPassword((v) => !v)}
+                    aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 transition-colors"
+                    style={{ color: 'var(--text-secondary)' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--gold-bright)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-secondary)')}
+                  >
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
+          {step === 'verify' && (
+            <>
+              <div className="text-sm text-gray-300 mb-4 p-3 bg-blue-900/20 border border-blue-800/50 rounded-lg">
+                Es tu primer inicio de sesión. Por seguridad, te hemos enviado un <strong>código de verificación</strong> a tu correo para cambiar tu contraseña.
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1 text-gray-300">Código de Verificación (6 dígitos)</label>
+                <input
+                  type="text"
+                  value={verificationCode}
+                  onChange={(e) => setVerificationCode(e.target.value)}
+                  required
+                  maxLength={6}
+                  placeholder="Ej: 123456"
+                  className="w-full px-4 py-2 rounded border focus:outline-none focus:ring-1 focus:ring-yellow-500 text-center tracking-widest text-lg"
+                  style={{
+                    background: 'var(--bg-elevated)',
+                    borderColor: 'var(--border-default)',
+                    color: 'var(--gold-bright)',
+                  }}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1 text-gray-300">Nueva Contraseña</label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    required
+                    autoComplete="new-password"
+                    className="w-full px-4 py-2 rounded border focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                    style={{
+                      background: 'var(--bg-elevated)',
+                      borderColor: 'var(--border-default)',
+                      color: 'white',
+                      paddingRight: 40,
+                    }}
+                  />
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 transition-colors"
+                    style={{ color: 'var(--text-secondary)' }}
+                  >
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
           <button
             type="submit"
             disabled={loading}
@@ -125,18 +215,34 @@ export default function LoginPage() {
               (e.currentTarget.style.background = 'var(--gold-muted)')
             }
           >
-            {loading ? 'Ingresando...' : 'Ingresar'}
+            {loading ? 'Procesando...' : step === 'login' ? 'Ingresar' : 'Cambiar contraseña e ingresar'}
           </button>
-          <div className="text-center pt-2">
-            <button
-              type="button"
-              onClick={() => setForgotOpen(true)}
-              className="text-xs underline hover:no-underline"
-              style={{ color: 'var(--text-secondary)' }}
-            >
-              ¿Olvidó su contraseña?
-            </button>
-          </div>
+          
+          {step === 'login' && (
+            <div className="text-center pt-2">
+              <button
+                type="button"
+                onClick={() => setForgotOpen(true)}
+                className="text-xs underline hover:no-underline"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                ¿Olvidó su contraseña?
+              </button>
+            </div>
+          )}
+          
+          {step === 'verify' && (
+            <div className="text-center pt-2">
+              <button
+                type="button"
+                onClick={() => setStep('login')}
+                className="text-xs underline hover:no-underline"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                Volver
+              </button>
+            </div>
+          )}
         </form>
       </div>
 

@@ -95,5 +95,14 @@ class Settings(BaseSettings):
     initial_admin_username: str = "admin"
     initial_admin_password: str = "admin123"
 
+    # ── SMTP (relay interno del banco, sin TLS ni AUTH) ──────────────────────
+    # Todos los valores pueden sobreescribirse desde el .env con el prefijo
+    # SMTP_HOST, SMTP_PORT, etc.
+    smtp_host: str = "172.16.17.171"
+    smtp_port: int = 25
+    smtp_from: str = "noreply@banco.com"
+    smtp_timeout: int = 10          # segundos; evita bloquear el startup si el relay no responde
+    smtp_enabled: bool = True       # False → las notificaciones se loguan pero no se envían
+
 
 settings = Settings()

@@ -94,6 +94,13 @@ async function handleResponse<T>(res: Response): Promise<T> {
 
 // ── Auth ───────────────────────────────────────────────────────────────────
 
+export class MustChangePasswordError extends Error {
+  constructor(message = 'Debe cambiar su contraseña') {
+    super(message);
+    this.name = 'MustChangePasswordError';
+  }
+}
+
 export async function login(identifier: string, password: string): Promise<LoginResponse> {
   const res = await fetch(`${API_URL}/api/auth/login`, {
     method: 'POST',
@@ -103,9 +110,35 @@ export async function login(identifier: string, password: string): Promise<Login
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: '' }));
     const detail = (err as { detail?: string }).detail;
+    if (res.status === 403 && detail === 'must_change_password') {
+      throw new MustChangePasswordError();
+    }
     if (res.status === 401) throw new Error(detail || 'Credenciales incorrectas');
     if (res.status === 403) throw new Error(detail || 'Acceso denegado');
     throw new Error(detail || `Error al iniciar sesión: ${res.status}`);
+  }
+  return res.json() as Promise<LoginResponse>;
+}
+
+export async function sendVerificationCode(identifier: string, password: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/auth/send-verification-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier, password }),
+  });
+  return handleResponse<void>(res);
+}
+
+export async function verifyFirstLogin(identifier: string, password: string, code: string, newPassword: string): Promise<LoginResponse> {
+  const res = await fetch(`${API_URL}/api/auth/verify-first-login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier, password, code, new_password: newPassword }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: '' }));
+    const detail = (err as { detail?: string }).detail;
+    throw new Error(detail || `Error al verificar: ${res.status}`);
   }
   return res.json() as Promise<LoginResponse>;
 }

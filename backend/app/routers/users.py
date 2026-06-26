@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import datetime, timezone
 
@@ -23,6 +24,7 @@ from app.db.schemas.user import (
 )
 from app.db.session import get_pg_db
 from app.dependencies import get_current_user
+from app.services.email_service import notify_account_created, notify_password_reset
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -70,12 +72,26 @@ async def create_user(
         role_id=body.role_id,
         is_active=body.is_active,
         created_by=current_user.id,
+        must_change_password=True,
     )
     db.add(new_user)
     try:
         await db.commit()
         await db.refresh(new_user)
         user = await db.scalar(select(PGUser).where(PGUser.id == new_user.id))
+
+        # Notificación de bienvenida con credenciales iniciales (best-effort)
+        if user and user.email:
+            role_name = user.role.name if user.role else None
+            asyncio.create_task(
+                notify_account_created(
+                    to_addr=user.email,
+                    username=user.username,
+                    temp_password=body.password,
+                    role_name=role_name,
+                )
+            )
+
         return user
     except Exception:
         await db.rollback()
@@ -208,7 +224,7 @@ async def reset_user_password(
     user_id: uuid.UUID,
     body: PasswordResetRequest,
     db: AsyncSession = Depends(get_pg_db),
-    _: PGUser = Depends(require_permission("can_manage_users")),
+    current_user: PGUser = Depends(require_permission("can_manage_users")),
 ):
     """
     Admin resetea la contraseña de un usuario. Setea tokens_valid_after=NOW()
@@ -226,6 +242,17 @@ async def reset_user_password(
     user.failed_login_attempts = 0
     user.locked_until = None
     await db.commit()
+
+    # Notificación de reset de contraseña (best-effort)
+    if user.email:
+        asyncio.create_task(
+            notify_password_reset(
+                to_addr=user.email,
+                username=user.username,
+                new_password=body.new_password,
+                reset_by=current_user.username,
+            )
+        )
 
 
 @router.patch("/{user_id}/role", response_model=UserOut)

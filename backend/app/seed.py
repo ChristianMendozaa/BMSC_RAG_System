@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 _LOCKOUT_DDL = (
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INT NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_code VARCHAR(10)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_code_expires_at TIMESTAMPTZ",
 )
 
 
@@ -80,6 +83,7 @@ async def seed_initial_admin(db: AsyncSession) -> None:
         role_id=superadmin_role.id,
         is_active=True,
         is_system=True,
+        must_change_password=False,
     )
     db.add(admin_user)
     await db.commit()

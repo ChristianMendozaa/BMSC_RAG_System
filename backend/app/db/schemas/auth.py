@@ -38,3 +38,15 @@ class LoginResponse(BaseModel):
 
 
 MeResponse = UserInfo
+
+
+class SendVerificationCodeRequest(BaseModel):
+    identifier: str
+    password: str
+
+
+class VerifyFirstLoginRequest(BaseModel):
+    identifier: str
+    password: str
+    code: str
+    new_password: str
