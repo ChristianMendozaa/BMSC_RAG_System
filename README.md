@@ -827,9 +827,9 @@ Metadata fields stored per vector:
 |--------|------|------|-------------|
 | `POST` | `/api/auth/login` | — | Login by **email** (or username for `is_system` admin); returns JWT + user info. Locks the account for `LOCKOUT_MINUTES` after `MAX_LOGIN_ATTEMPTS` failures (`is_system` exempt) |
 | `POST` | `/api/auth/send-verification-code` | — | Send first-login password-change code after validating temporary credentials |
-| `POST` | `/api/auth/verify-first-login` | — | Verify first-login code, set new password, and return JWT |
+| `POST` | `/api/auth/verify-first-login` | — | Verify first-login code and set new password; returns 204 so the user logs in manually afterward |
 | `POST` | `/api/auth/request-password-reset` | — | Send password-reset code by email without revealing account existence |
-| `POST` | `/api/auth/confirm-password-reset` | — | Verify reset code, set new password, and return JWT |
+| `POST` | `/api/auth/confirm-password-reset` | — | Verify reset code and set new password; returns 204 so the user logs in manually afterward |
 | `POST` | `/api/auth/logout` | Bearer | Revoke current token (inserts JTI into `revoked_tokens`) |
 | `GET` | `/api/auth/me` | Bearer | Current user info |
 
@@ -1004,6 +1004,23 @@ Manual relay check from the VM:
 python3 backend/tests/smtp_email_check.py --to user@example.com
 python3 backend/tests/smtp_email_check.py --to user@example.com --dry-run
 ```
+
+Local email template previews without SMTP:
+
+```bash
+python3 backend/tools/preview_emails.py
+python3 backend/tools/preview_emails.py --output /tmp/bmsc_email_previews
+```
+
+Email deliverability checklist for production:
+
+- Use a real authorized `SMTP_FROM` domain, not `bmsc.local` or any local-only domain.
+- Publish SPF allowing the bank SMTP relay to send for that domain.
+- Sign outbound mail with DKIM and align DKIM/SPF with the visible From domain.
+- Publish a DMARC policy for the sender domain and monitor aggregate reports.
+- Ensure the relay public IP has PTR/rDNS matching the sending hostname.
+- Prefer STARTTLS on the relay path when the bank SMTP infrastructure supports it.
+- Keep the visible sender as `BMSC Base de Conocimiento` for all transactional messages.
 
 ### Performance Logging
 | Variable | Default | Description |

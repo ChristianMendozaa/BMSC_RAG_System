@@ -129,7 +129,7 @@ export async function sendVerificationCode(identifier: string, password: string)
   return handleResponse<void>(res);
 }
 
-export async function verifyFirstLogin(identifier: string, password: string, code: string, newPassword: string): Promise<LoginResponse> {
+export async function verifyFirstLogin(identifier: string, password: string, code: string, newPassword: string): Promise<void> {
   const res = await fetch(`${API_URL}/api/auth/verify-first-login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -140,7 +140,6 @@ export async function verifyFirstLogin(identifier: string, password: string, cod
     const detail = (err as { detail?: string }).detail;
     throw new Error(detail || `Error al verificar: ${res.status}`);
   }
-  return res.json() as Promise<LoginResponse>;
 }
 
 export async function requestPasswordReset(identifier: string): Promise<void> {
@@ -152,7 +151,7 @@ export async function requestPasswordReset(identifier: string): Promise<void> {
   return handleResponse<void>(res);
 }
 
-export async function confirmPasswordReset(identifier: string, code: string, newPassword: string): Promise<LoginResponse> {
+export async function confirmPasswordReset(identifier: string, code: string, newPassword: string): Promise<void> {
   const res = await fetch(`${API_URL}/api/auth/confirm-password-reset`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -163,7 +162,6 @@ export async function confirmPasswordReset(identifier: string, code: string, new
     const detail = (err as { detail?: string }).detail;
     throw new Error(detail || `Error al recuperar contraseña: ${res.status}`);
   }
-  return res.json() as Promise<LoginResponse>;
 }
 
 export async function logout(): Promise<void> {

@@ -1,0 +1,10 @@
+Hola $username,
+
+Tu código de verificación para completar el cambio de contraseña en BMSC Base de Conocimiento es:
+
+    $code
+
+Este código expira en $expires_minutes minutos.
+No compartas este código con nadie. Ningún administrador te solicitará este código.
+
+Este mensaje fue generado automáticamente por BMSC Base de Conocimiento. No respondas a este correo.

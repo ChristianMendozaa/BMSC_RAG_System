@@ -250,12 +250,12 @@ async def send_verification_code(
         raise HTTPException(status_code=503, detail="No se pudo enviar el código de verificación")
 
 
-@router.post("/verify-first-login", response_model=LoginResponse)
+@router.post("/verify-first-login", status_code=204)
 async def verify_first_login(
     body: VerifyFirstLoginRequest,
     db: AsyncSession = Depends(get_pg_db),
 ):
-    """Verifica el código de 6 dígitos y cambia la contraseña, retornando el token de login."""
+    """Verifica el código de 6 dígitos y cambia la contraseña."""
     ident = body.identifier.strip()
     user = await db.scalar(
         select(PGUser).where(func.lower(PGUser.email) == ident.lower())
@@ -282,15 +282,6 @@ async def verify_first_login(
     _clear_verification_code(user)
     user.tokens_valid_after = now
     await db.commit()
-
-    # Generar token y loguear automáticamente
-    jti = uuid.uuid4()
-    token = create_access_token(user_id=user.id, jti=jti)
-    return LoginResponse(
-        access_token=token,
-        token_type="bearer",
-        user=UserInfo.model_validate(user),
-    )
 
 
 @router.post("/request-password-reset", status_code=204)
@@ -327,7 +318,7 @@ async def request_password_reset(
         raise HTTPException(status_code=503, detail="No se pudo enviar el código de recuperación")
 
 
-@router.post("/confirm-password-reset", response_model=LoginResponse)
+@router.post("/confirm-password-reset", status_code=204)
 async def confirm_password_reset(
     body: ConfirmPasswordResetRequest,
     db: AsyncSession = Depends(get_pg_db),
@@ -357,11 +348,3 @@ async def confirm_password_reset(
     user.tokens_valid_after = now
     _clear_verification_code(user)
     await db.commit()
-
-    jti = uuid.uuid4()
-    token = create_access_token(user_id=user.id, jti=jti)
-    return LoginResponse(
-        access_token=token,
-        token_type="bearer",
-        user=UserInfo.model_validate(user),
-    )

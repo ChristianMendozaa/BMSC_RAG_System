@@ -257,6 +257,7 @@ async def reset_user_password(
                 to_addr=user.email,
                 username=user.username,
                 reset_by=current_user.username,
+                temporary_password=body.new_password,
             )
         )
 

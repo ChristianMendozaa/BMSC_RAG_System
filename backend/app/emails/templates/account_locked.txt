@@ -1,0 +1,8 @@
+Hola $username,
+
+Tu cuenta en BMSC Base de Conocimiento fue bloqueada por $lockout_minutes minuto(s) debido a múltiples intentos de inicio de sesión fallidos.
+
+Si no fuiste tú, comunícate con el administrador.
+Tu cuenta se desbloqueará automáticamente transcurrido ese tiempo.
+
+Este mensaje fue generado automáticamente por BMSC Base de Conocimiento. No respondas a este correo.
