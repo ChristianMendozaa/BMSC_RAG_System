@@ -199,15 +199,17 @@ async def notify_verification_code(
 async def notify_account_created(
     to_addr: str,
     username: str,
+    temporary_password: str,
     role_name: str | None = None,
 ) -> bool:
     """
     Notifica al nuevo usuario que su cuenta fue creada y le entrega
-    su usuario de acceso sin incluir contraseñas.
+    su usuario de acceso junto con la contraseña temporal.
     """
     subject = "Tu cuenta en BMSC ha sido creada"
     safe_username = html.escape(username)
     safe_to = html.escape(to_addr)
+    safe_password = html.escape(temporary_password)
     safe_role = html.escape(role_name) if role_name else None
     role_line = f"<p style='{_LABEL_STYLE}'>Rol asignado</p><p style='{_VALUE_STYLE}'>{safe_role}</p>" if safe_role else ""
 
@@ -215,14 +217,17 @@ async def notify_account_created(
       <p style="font-size:15px;color:#222;">Hola, <strong>{safe_username}</strong>.</p>
       <p style="color:#555;font-size:14px;">
         Tu cuenta en el sistema de gestión documental del banco ha sido creada.
-        A continuación se muestra tu usuario de acceso:
+        A continuación se muestran tus credenciales temporales de acceso:
       </p>
       <p style="{_LABEL_STYLE}">Correo / usuario</p>
       <p style="{_VALUE_STYLE}">{safe_to}</p>
+      <p style="{_LABEL_STYLE}">Contraseña temporal</p>
+      <p style="{_VALUE_STYLE}">{safe_password}</p>
       {role_line}
       <div style="{_WARN_STYLE}">
-        <strong>&#9888; Importante:</strong> Por seguridad, este correo no incluye contraseñas.
-        Usa la contraseña temporal entregada por el administrador y cámbiala en el primer inicio de sesión.
+        <strong>&#9888; Importante:</strong> Esta contraseña es temporal.
+        Inicia sesión con tu correo y esta contraseña. Luego el sistema te pedirá
+        cambiarla y enviará un código de verificación separado a tu correo.
       </div>
     """
 
@@ -230,8 +235,9 @@ async def notify_account_created(
         f"Hola {username},\n\n"
         f"Tu cuenta en BMSC fue creada.\n"
         f"Usuario: {to_addr}\n"
+        f"Contraseña temporal: {temporary_password}\n"
         + (f"Rol: {role_name}\n" if role_name else "")
-        + "\nPor seguridad, este correo no incluye contraseñas. Usa la contraseña temporal entregada por el administrador y cámbiala al iniciar sesión.\n"
+        + "\nEsta contraseña es temporal. Inicia sesión con tu correo y esta contraseña. Luego el sistema te pedirá cambiarla y enviará un código de verificación separado a tu correo.\n"
         "\nEste mensaje es automático. No respondas a este correo.\n"
     )
 
