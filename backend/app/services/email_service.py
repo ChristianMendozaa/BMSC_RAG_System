@@ -13,19 +13,65 @@ como False al llamador; los endpoints críticos deciden si deben fallar.
 
 import asyncio
 import email.utils
-import html
 import logging
 import smtplib
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from functools import partial
 
 from app.config import settings
+from app.emails.renderer import BRAND_NAME, LOGO_CID, LOGO_FILENAME, LOGO_PATH
+from app.emails.messages import (
+    build_account_created_email,
+    build_account_locked_email,
+    build_password_reset_code_email,
+    build_password_reset_email,
+    build_verification_code_email,
+)
 
 logger = logging.getLogger(__name__)
 
 
 # ─── Envío base ───────────────────────────────────────────────────────────────
+
+def _message_id_domain(from_addr: str) -> str | None:
+    if "@" not in from_addr:
+        return None
+    domain = from_addr.rsplit("@", 1)[1].strip()
+    return domain or None
+
+
+def _build_mime_message(
+    to_addr: str,
+    subject: str,
+    body_html: str,
+    body_plain: str,
+) -> MIMEMultipart:
+    msg = MIMEMultipart("related")
+    msg["Subject"] = subject
+    msg["From"] = email.utils.formataddr((BRAND_NAME, settings.smtp_from))
+    msg["To"] = to_addr
+    msg["Date"] = email.utils.formatdate(localtime=True)
+    msg["Message-ID"] = email.utils.make_msgid(domain=_message_id_domain(settings.smtp_from))
+    msg["Auto-Submitted"] = "auto-generated"
+    msg["X-Mailer"] = "BMSC-Base-de-Conocimiento"
+
+    alternative = MIMEMultipart("alternative")
+    alternative.attach(MIMEText(body_plain, "plain", "utf-8"))
+    alternative.attach(MIMEText(body_html, "html", "utf-8"))
+    msg.attach(alternative)
+
+    if LOGO_PATH.exists():
+        logo = MIMEImage(LOGO_PATH.read_bytes(), _subtype="png")
+        logo.add_header("Content-ID", f"<{LOGO_CID}>")
+        logo.add_header("Content-Disposition", "inline", filename=LOGO_FILENAME)
+        msg.attach(logo)
+    else:
+        logger.warning("[email] No se encontró el logo inline: %s", LOGO_PATH)
+
+    return msg
+
 
 def _send_sync(
     to_addr: str,
@@ -37,15 +83,7 @@ def _send_sync(
     Envía un email de forma síncrona (se llama desde un thread del executor).
     Usa SMTP plano en el puerto 25 sin TLS ni autenticación.
     """
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = email.utils.formataddr(("BMSC Sistema", settings.smtp_from))
-    msg["To"] = to_addr
-    msg["Date"] = email.utils.formatdate(localtime=True)
-    msg["X-Mailer"] = "BMSC-RAG/2.0"
-
-    msg.attach(MIMEText(body_plain, "plain", "utf-8"))
-    msg.attach(MIMEText(body_html,  "html",  "utf-8"))
+    msg = _build_mime_message(to_addr, subject, body_html, body_plain)
 
     with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=settings.smtp_timeout) as s:
         s.ehlo()
@@ -81,72 +119,6 @@ async def send_email(to_addr: str, subject: str, body_html: str, body_plain: str
     return False
 
 
-# ─── Plantillas HTML ──────────────────────────────────────────────────────────
-
-_BASE_STYLE = """
-  font-family: Arial, Helvetica, sans-serif;
-  background: #f5f6fa;
-  margin: 0; padding: 0;
-"""
-
-_CARD_STYLE = """
-  background: #ffffff;
-  max-width: 560px;
-  margin: 32px auto;
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0,0,0,.08);
-"""
-
-_HEADER_STYLE = """
-  background: #003366;
-  padding: 24px 32px;
-  color: #ffffff;
-"""
-
-_BODY_STYLE = "padding: 32px;"
-_FOOTER_STYLE = "padding: 16px 32px; background:#f5f6fa; font-size:11px; color:#888; text-align:center;"
-
-_LABEL_STYLE = "color:#555; font-size:13px; margin:0 0 2px 0;"
-_VALUE_STYLE = (
-    "background:#f0f4ff; border-radius:4px; padding:8px 14px; "
-    "font-size:15px; font-family:monospace; color:#003366; margin:0 0 16px 0;"
-)
-_WARN_STYLE = (
-    "background:#fff3cd; border-left:4px solid #e6a817; "
-    "border-radius:4px; padding:10px 14px; font-size:13px; color:#6d4f00; margin-top:16px;"
-)
-_NOTE_STYLE = (
-    "background:#e8f4fd; border-left:4px solid #0077cc; "
-    "border-radius:4px; padding:10px 14px; font-size:13px; color:#004d80; margin-top:16px;"
-)
-
-
-def _wrap_template(title: str, content: str) -> str:
-    safe_title = html.escape(title)
-    return f"""<!DOCTYPE html>
-<html lang="es">
-<head><meta charset="UTF-8"><title>{safe_title}</title></head>
-<body style="{_BASE_STYLE}">
-  <div style="{_CARD_STYLE}">
-    <div style="{_HEADER_STYLE}">
-      <h1 style="margin:0;font-size:20px;font-weight:700;letter-spacing:.5px;">
-        BMSC · Sistema de Documentación
-      </h1>
-      <p style="margin:4px 0 0;font-size:13px;opacity:.8;">{safe_title}</p>
-    </div>
-    <div style="{_BODY_STYLE}">
-      {content}
-    </div>
-    <div style="{_FOOTER_STYLE}">
-      Este mensaje fue generado automáticamente. No responda a este correo.<br>
-      &copy; Banco Mercantil Santa Cruz · Sistema RAG Interno
-    </div>
-  </div>
-</body>
-</html>"""
-
-
 # ─── Notificación: código de verificación (primer login) ──────────────────────
 
 async def notify_verification_code(
@@ -159,39 +131,8 @@ async def notify_verification_code(
     Envía un código de verificación de 6 dígitos requerido para cambiar
     la contraseña en el primer inicio de sesión.
     """
-    subject = "Código de verificación - BMSC"
-    safe_username = html.escape(username)
-    safe_code = html.escape(code)
-
-    html_content = f"""
-      <p style="font-size:15px;color:#222;">Hola, <strong>{safe_username}</strong>.</p>
-      <p style="color:#555;font-size:14px;">
-        Este es tu código de verificación para completar el cambio de contraseña:
-      </p>
-      <div style="text-align:center; margin:24px 0;">
-        <span style="background:#003366; color:#fff; padding:12px 24px; font-size:24px; font-weight:bold; letter-spacing:4px; border-radius:6px; display:inline-block;">
-          {safe_code}
-        </span>
-      </div>
-      <p style="color:#555;font-size:14px;text-align:center;">
-        El código expirará en {expires_minutes} minutos.
-      </p>
-      <div style="{_WARN_STYLE}">
-        <strong>&#9888; Importante:</strong> No compartas este código con nadie.
-        Ningún administrador te solicitará este código.
-      </div>
-    """
-
-    plain = (
-        f"Hola {username},\n\n"
-        f"Tu código de verificación para cambiar tu contraseña es:\n\n"
-        f"    {code}\n\n"
-        f"Este código expira en {expires_minutes} minutos.\n"
-        "Si no solicitaste este código, ignora este mensaje.\n\n"
-        "Este mensaje es automático. No respondas a este correo.\n"
-    )
-
-    return await send_email(to_addr, subject, _wrap_template(subject, html_content), plain)
+    email = build_verification_code_email(username, code, expires_minutes)
+    return await send_email(to_addr, email.subject, email.body_html, email.body_plain)
 
 
 # ─── Notificación: cuenta creada ──────────────────────────────────────────────
@@ -206,42 +147,8 @@ async def notify_account_created(
     Notifica al nuevo usuario que su cuenta fue creada y le entrega
     su usuario de acceso junto con la contraseña temporal.
     """
-    subject = "Tu cuenta en BMSC ha sido creada"
-    safe_username = html.escape(username)
-    safe_to = html.escape(to_addr)
-    safe_password = html.escape(temporary_password)
-    safe_role = html.escape(role_name) if role_name else None
-    role_line = f"<p style='{_LABEL_STYLE}'>Rol asignado</p><p style='{_VALUE_STYLE}'>{safe_role}</p>" if safe_role else ""
-
-    html_content = f"""
-      <p style="font-size:15px;color:#222;">Hola, <strong>{safe_username}</strong>.</p>
-      <p style="color:#555;font-size:14px;">
-        Tu cuenta en el sistema de gestión documental del banco ha sido creada.
-        A continuación se muestran tus credenciales temporales de acceso:
-      </p>
-      <p style="{_LABEL_STYLE}">Correo / usuario</p>
-      <p style="{_VALUE_STYLE}">{safe_to}</p>
-      <p style="{_LABEL_STYLE}">Contraseña temporal</p>
-      <p style="{_VALUE_STYLE}">{safe_password}</p>
-      {role_line}
-      <div style="{_WARN_STYLE}">
-        <strong>&#9888; Importante:</strong> Esta contraseña es temporal.
-        Inicia sesión con tu correo y esta contraseña. Luego el sistema te pedirá
-        cambiarla y enviará un código de verificación separado a tu correo.
-      </div>
-    """
-
-    plain = (
-        f"Hola {username},\n\n"
-        f"Tu cuenta en BMSC fue creada.\n"
-        f"Usuario: {to_addr}\n"
-        f"Contraseña temporal: {temporary_password}\n"
-        + (f"Rol: {role_name}\n" if role_name else "")
-        + "\nEsta contraseña es temporal. Inicia sesión con tu correo y esta contraseña. Luego el sistema te pedirá cambiarla y enviará un código de verificación separado a tu correo.\n"
-        "\nEste mensaje es automático. No respondas a este correo.\n"
-    )
-
-    return await send_email(to_addr, subject, _wrap_template(subject, html_content), plain)
+    email = build_account_created_email(to_addr, username, temporary_password, role_name)
+    return await send_email(to_addr, email.subject, email.body_html, email.body_plain)
 
 
 # ─── Notificación: contraseña reseteada ───────────────────────────────────────
@@ -250,43 +157,13 @@ async def notify_password_reset(
     to_addr: str,
     username: str,
     reset_by: str,
+    temporary_password: str,
 ) -> bool:
     """
     Notifica al usuario que un administrador reseteó su contraseña.
     """
-    subject = "Tu contraseña en BMSC fue restablecida"
-    safe_username = html.escape(username)
-    safe_to = html.escape(to_addr)
-    safe_reset_by = html.escape(reset_by)
-
-    html_content = f"""
-      <p style="font-size:15px;color:#222;">Hola, <strong>{safe_username}</strong>.</p>
-      <p style="color:#555;font-size:14px;">
-        Un administrador (<strong>{safe_reset_by}</strong>) ha restablecido tu contraseña.
-        Por seguridad, este correo no incluye la contraseña temporal.
-      </p>
-      <p style="{_LABEL_STYLE}">Correo / usuario</p>
-      <p style="{_VALUE_STYLE}">{safe_to}</p>
-      <div style="{_WARN_STYLE}">
-        <strong>&#9888; Si no solicitaste este cambio</strong>, comunícate de
-        inmediato con el administrador del sistema.
-      </div>
-      <div style="{_NOTE_STYLE}">
-        Todas tus sesiones activas han sido cerradas por seguridad.
-      </div>
-    """
-
-    plain = (
-        f"Hola {username},\n\n"
-        f"El administrador {reset_by} restableció tu contraseña en BMSC.\n"
-        f"Usuario: {to_addr}\n"
-        "Por seguridad, este correo no incluye la contraseña temporal.\n\n"
-        "Todas tus sesiones activas fueron cerradas.\n"
-        "Si no solicitaste este cambio, contacta al administrador.\n\n"
-        "Este mensaje es automático. No respondas a este correo.\n"
-    )
-
-    return await send_email(to_addr, subject, _wrap_template(subject, html_content), plain)
+    email = build_password_reset_email(to_addr, username, reset_by, temporary_password)
+    return await send_email(to_addr, email.subject, email.body_html, email.body_plain)
 
 
 async def notify_password_reset_code(
@@ -296,39 +173,8 @@ async def notify_password_reset_code(
     expires_minutes: int = 15,
 ) -> bool:
     """Envía un código de un solo uso para recuperación autoservicio."""
-    subject = "Código para recuperar tu contraseña - BMSC"
-    safe_username = html.escape(username)
-    safe_code = html.escape(code)
-
-    html_content = f"""
-      <p style="font-size:15px;color:#222;">Hola, <strong>{safe_username}</strong>.</p>
-      <p style="color:#555;font-size:14px;">
-        Recibimos una solicitud para recuperar tu contraseña. Usa este código para definir una nueva:
-      </p>
-      <div style="text-align:center; margin:24px 0;">
-        <span style="background:#003366; color:#fff; padding:12px 24px; font-size:24px; font-weight:bold; letter-spacing:4px; border-radius:6px; display:inline-block;">
-          {safe_code}
-        </span>
-      </div>
-      <p style="color:#555;font-size:14px;text-align:center;">
-        El código expirará en {expires_minutes} minutos.
-      </p>
-      <div style="{_WARN_STYLE}">
-        <strong>&#9888; Importante:</strong> Si no solicitaste recuperar tu contraseña,
-        ignora este mensaje y comunícate con el administrador.
-      </div>
-    """
-
-    plain = (
-        f"Hola {username},\n\n"
-        "Recibimos una solicitud para recuperar tu contraseña.\n"
-        f"Tu código es:\n\n    {code}\n\n"
-        f"Este código expira en {expires_minutes} minutos.\n"
-        "Si no solicitaste este cambio, contacta al administrador.\n\n"
-        "Este mensaje es automático. No respondas a este correo.\n"
-    )
-
-    return await send_email(to_addr, subject, _wrap_template(subject, html_content), plain)
+    email = build_password_reset_code_email(username, code, expires_minutes)
+    return await send_email(to_addr, email.subject, email.body_html, email.body_plain)
 
 
 # ─── Notificación: cuenta bloqueada ───────────────────────────────────────────
@@ -341,33 +187,5 @@ async def notify_account_locked(
     """
     Notifica al usuario que su cuenta fue bloqueada por intentos fallidos.
     """
-    subject = "Tu cuenta en BMSC ha sido bloqueada temporalmente"
-
-    html_content = f"""
-      <p style="font-size:15px;color:#222;">Hola, <strong>{username}</strong>.</p>
-      <p style="color:#555;font-size:14px;">
-        Tu cuenta ha sido <strong>bloqueada temporalmente</strong> debido a
-        múltiples intentos de inicio de sesión fallidos.
-      </p>
-      <p style="{_LABEL_STYLE}">Duración del bloqueo</p>
-      <p style="{_VALUE_STYLE}">{lockout_minutes} minuto(s)</p>
-      <div style="{_WARN_STYLE}">
-        <strong>&#9888; Si no fuiste tú</strong>, alguien puede estar intentando
-        acceder a tu cuenta. Comunícate con el administrador del sistema.
-      </div>
-      <div style="{_NOTE_STYLE}">
-        Tu cuenta se desbloqueará automáticamente transcurrido ese tiempo.
-        Si necesitas acceso inmediato, contacta a un administrador.
-      </div>
-    """
-
-    plain = (
-        f"Hola {username},\n\n"
-        f"Tu cuenta en BMSC fue bloqueada por {lockout_minutes} minuto(s) "
-        "debido a múltiples intentos de inicio de sesión fallidos.\n\n"
-        "Si no fuiste tú, contacta al administrador de inmediato.\n"
-        "Tu cuenta se desbloqueará automáticamente.\n\n"
-        "Este mensaje es automático. No respondas a este correo.\n"
-    )
-
-    return await send_email(to_addr, subject, _wrap_template(subject, html_content), plain)
+    email = build_account_locked_email(username, lockout_minutes)
+    return await send_email(to_addr, email.subject, email.body_html, email.body_plain)

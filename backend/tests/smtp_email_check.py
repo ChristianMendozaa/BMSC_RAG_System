@@ -63,13 +63,13 @@ def get_smtp_settings() -> tuple[str, int, str, int, bool]:
 
 def build_message(from_addr: str, to_addr: str) -> EmailMessage:
     msg = EmailMessage()
-    msg["Subject"] = "BMSC RAG SMTP test"
-    msg["From"] = email.utils.formataddr(("BMSC RAG Test", from_addr))
+    msg["Subject"] = "BMSC Base de Conocimiento | Prueba SMTP"
+    msg["From"] = email.utils.formataddr(("BMSC Base de Conocimiento", from_addr))
     msg["To"] = to_addr
     msg["Date"] = email.utils.formatdate(localtime=True)
     msg.set_content(
-        "This is a test email sent by the BMSC RAG backend SMTP check script.\n"
-        "If you received it, SMTP_HOST, SMTP_PORT and SMTP_FROM are working.\n"
+        "Este es un correo de prueba enviado por BMSC Base de Conocimiento.\n"
+        "Si lo recibiste, SMTP_HOST, SMTP_PORT y SMTP_FROM estan funcionando.\n"
     )
     return msg
 
@@ -121,6 +121,7 @@ def run_relay_check(to_addr: str, dry_run: bool) -> int:
                 print("OK: handshake, sender and recipient checks passed. Email was not sent.")
                 return 0
 
+            smtp.rset()
             msg = build_message(from_addr, to_addr)
             refused = smtp.send_message(msg, from_addr=from_addr, to_addrs=[to_addr])
             if refused:
