@@ -509,6 +509,7 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
   const [users, setUsers] = useState<UserOut[]>([]);
   const [form, setForm] = useState({ email: '', password: '', role_id: '' });
   const [confirmPw, setConfirmPw] = useState('');
+  const [manualPassword, setManualPassword] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const [showConfirmPw, setShowConfirmPw] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -543,16 +544,36 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
     return () => clearTimeout(t);
   }, [userSearch]);
 
-  const passwordsValid = form.password.length >= 4 && form.password === confirmPw;
+  const passwordTrimmed = form.password.trim();
+  const passwordProvided = manualPassword && passwordTrimmed.length > 0;
+  const passwordsValid = !manualPassword || (form.password.length >= 4 && form.password === confirmPw);
   const emailValid = form.email.trim().includes('@') && form.email.trim().length >= 3;
+
+  const toggleManualPassword = () => {
+    setManualPassword((current) => {
+      const next = !current;
+      if (!next) {
+        setForm((value) => ({ ...value, password: '' }));
+        setConfirmPw('');
+        setShowPw(false);
+        setShowConfirmPw(false);
+      }
+      return next;
+    });
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!passwordsValid || !emailValid) return;
     setBusy(true);
     try {
-      await createUser({ email: form.email.trim().toLowerCase(), password: form.password, role_id: form.role_id });
+      await createUser({
+        email: form.email.trim().toLowerCase(),
+        ...(passwordProvided ? { password: form.password } : {}),
+        role_id: form.role_id,
+      });
       setForm({ email: '', password: '', role_id: '' });
+      setManualPassword(false);
       setConfirmPw(''); setShowPw(false); setShowConfirmPw(false);
       await load();
       flash('Usuario creado correctamente');
@@ -629,33 +650,67 @@ function UsuariosSection({ roles }: { roles: RoleInfo[] }) {
             type="email" placeholder="correo@bmsc.com.bo" required
             value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })}
           />
-          <div className="relative">
-            <Input
-              type={showPw ? 'text' : 'password'} placeholder="Contraseña" required
-              value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })}
-              style={{ paddingRight: 36 }}
-            />
-            <button type="button" tabIndex={-1} onClick={() => setShowPw(v => !v)}
-              className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }}>
-              {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
+          <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2" style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)' }}>
+            <div className="min-w-0">
+              <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Definir contraseña temporal</p>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Apagado: el sistema la genera y la envía por correo.</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={manualPassword}
+              aria-label="Definir contraseña temporal manualmente"
+              onClick={toggleManualPassword}
+              style={{
+                width: 40, height: 22, borderRadius: 999,
+                background: manualPassword ? 'var(--gold-muted)' : 'var(--bg-base)',
+                border: `1px solid ${manualPassword ? 'var(--gold-bright)' : 'var(--border-default)'}`,
+                position: 'relative', cursor: 'pointer', flexShrink: 0,
+                transition: 'background 0.15s, border-color 0.15s',
+              }}
+            >
+              <span
+                style={{
+                  position: 'absolute', top: 3,
+                  left: manualPassword ? 20 : 3, width: 14, height: 14,
+                  borderRadius: '50%',
+                  background: manualPassword ? 'var(--gold-bright)' : 'var(--text-muted)',
+                  transition: 'left 0.15s, background 0.15s',
+                }}
+              />
             </button>
           </div>
-          <div className="relative">
-            <Input
-              type={showConfirmPw ? 'text' : 'password'} placeholder="Repetir contraseña" required
-              value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
-              style={{ paddingRight: 36 }}
-            />
-            <button type="button" tabIndex={-1} onClick={() => setShowConfirmPw(v => !v)}
-              className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }}>
-              {showConfirmPw ? <EyeOff size={14} /> : <Eye size={14} />}
-            </button>
-          </div>
-          {form.password && form.password.length < 4 && (
-            <p className="text-xs" style={{ color: '#f87171' }}>Mínimo 4 caracteres</p>
-          )}
-          {form.password && confirmPw && form.password !== confirmPw && (
-            <p className="text-xs" style={{ color: '#f87171' }}>Las contraseñas no coinciden</p>
+          {manualPassword && (
+            <>
+              <div className="relative">
+                <Input
+                  type={showPw ? 'text' : 'password'} placeholder="Contraseña temporal"
+                  value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })}
+                  style={{ paddingRight: 36 }}
+                />
+                <button type="button" tabIndex={-1} onClick={() => setShowPw(v => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }}>
+                  {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              </div>
+              <div className="relative">
+                <Input
+                  type={showConfirmPw ? 'text' : 'password'} placeholder="Repetir contraseña"
+                  value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
+                  style={{ paddingRight: 36 }}
+                />
+                <button type="button" tabIndex={-1} onClick={() => setShowConfirmPw(v => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }}>
+                  {showConfirmPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              </div>
+              {form.password && form.password.length < 4 && (
+                <p className="text-xs" style={{ color: '#f87171' }}>Mínimo 4 caracteres</p>
+              )}
+              {passwordProvided && confirmPw && form.password !== confirmPw && (
+                <p className="text-xs" style={{ color: '#f87171' }}>Las contraseñas no coinciden</p>
+              )}
+            </>
           )}
           <Select required value={form.role_id} onChange={(e) => setForm({ ...form, role_id: e.target.value })}>
             <option value="">Seleccionar rol</option>

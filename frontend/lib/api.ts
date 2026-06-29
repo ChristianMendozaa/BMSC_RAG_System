@@ -196,7 +196,7 @@ export async function getUsers(skip = 0, limit = 50): Promise<UsersListResponse>
 
 export async function createUser(data: {
   email: string;
-  password: string;
+  password?: string;
   role_id: string;
   is_active?: boolean;
 }): Promise<UserOut> {

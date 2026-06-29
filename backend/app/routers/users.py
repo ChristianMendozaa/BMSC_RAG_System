@@ -1,4 +1,6 @@
 import asyncio
+import secrets
+import string
 import uuid
 from datetime import datetime, timezone
 
@@ -27,6 +29,35 @@ from app.dependencies import get_current_user
 from app.services.email_service import notify_account_created, notify_password_reset
 
 router = APIRouter(prefix="/api/users", tags=["users"])
+
+
+TEMPORARY_PASSWORD_LENGTH = 12
+TEMPORARY_PASSWORD_LETTERS = string.ascii_letters
+TEMPORARY_PASSWORD_DIGITS = string.digits
+TEMPORARY_PASSWORD_SYMBOLS = "!@#$%&*"
+TEMPORARY_PASSWORD_ALPHABET = (
+    TEMPORARY_PASSWORD_LETTERS + TEMPORARY_PASSWORD_DIGITS + TEMPORARY_PASSWORD_SYMBOLS
+)
+
+
+def _generate_temporary_password(length: int = TEMPORARY_PASSWORD_LENGTH) -> str:
+    password_chars = [
+        secrets.choice(TEMPORARY_PASSWORD_LETTERS),
+        secrets.choice(TEMPORARY_PASSWORD_DIGITS),
+        secrets.choice(TEMPORARY_PASSWORD_SYMBOLS),
+    ]
+    password_chars.extend(
+        secrets.choice(TEMPORARY_PASSWORD_ALPHABET)
+        for _ in range(max(length, len(password_chars)) - len(password_chars))
+    )
+    secrets.SystemRandom().shuffle(password_chars)
+    return "".join(password_chars)
+
+
+def _resolve_temporary_password(password: str | None) -> str:
+    if password and password.strip():
+        return password
+    return _generate_temporary_password()
 
 
 @router.get("", response_model=UsersListResponse)
@@ -63,12 +94,13 @@ async def create_user(
     current_user: PGUser = Depends(require_permission("can_manage_users")),
 ):
     email_normalized = body.email.strip().lower()
+    temporary_password = _resolve_temporary_password(body.password)
     # Derivar nombre visible de la parte antes del @
     username_derived = email_normalized.split("@")[0]
     new_user = PGUser(
         username=username_derived,
         email=email_normalized,
-        hashed_password=get_password_hash(body.password),
+        hashed_password=get_password_hash(temporary_password),
         role_id=body.role_id,
         is_active=body.is_active,
         created_by=current_user.id,
@@ -80,14 +112,14 @@ async def create_user(
         await db.refresh(new_user)
         user = await db.scalar(select(PGUser).where(PGUser.id == new_user.id))
 
-        # Notificación de bienvenida con la contraseña temporal definida por el admin.
+        # Notificación de bienvenida con la contraseña temporal definida o generada.
         if user and user.email:
             role_name = user.role.name if user.role else None
             asyncio.create_task(
                 notify_account_created(
                     to_addr=user.email,
                     username=user.username,
-                    temporary_password=body.password,
+                    temporary_password=temporary_password,
                     role_name=role_name,
                 )
             )

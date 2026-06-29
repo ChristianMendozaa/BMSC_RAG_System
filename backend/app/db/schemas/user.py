@@ -8,7 +8,7 @@ from app.db.schemas.role import RoleOut
 
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str
+    password: str | None = None
     role_id: uuid.UUID
     is_active: bool = True
 
