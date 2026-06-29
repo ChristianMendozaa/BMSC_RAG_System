@@ -15,6 +15,7 @@ import asyncio
 import email.utils
 import logging
 import smtplib
+import unicodedata
 from email.message import EmailMessage
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
@@ -53,14 +54,18 @@ def _add_common_headers(msg: MIMEMultipart | EmailMessage, to_addr: str, subject
     msg["X-Mailer"] = "BMSC-Base-de-Conocimiento"
 
 
+def _to_7bit_text(value: str) -> str:
+    return unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+
+
 def _build_plain_message(
     to_addr: str,
     subject: str,
     body_plain: str,
 ) -> EmailMessage:
     msg = EmailMessage()
-    _add_common_headers(msg, to_addr, subject)
-    msg.set_content(body_plain.rstrip() + "\n\n", charset="utf-8")
+    _add_common_headers(msg, to_addr, _to_7bit_text(subject))
+    msg.set_content(_to_7bit_text(body_plain).rstrip() + "\n\n")
     return msg
 
 
