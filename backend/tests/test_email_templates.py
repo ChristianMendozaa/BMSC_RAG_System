@@ -128,5 +128,8 @@ def test_email_smtp_message_can_be_plain_text(monkeypatch):
     assert "Tu cuenta en BMSC Base de Conocimiento fue creada." in msg.get_content()
     assert "Contrasena temporal: Temporal1234" in msg.get_content()
     assert msg["Content-Transfer-Encoding"] == "7bit"
+    assert "Message-ID" not in msg
+    assert "Auto-Submitted" not in msg
+    assert "X-Mailer" not in msg
     assert msg.get_content().endswith("\n\n")
     assert not msg.is_multipart()

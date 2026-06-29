@@ -49,7 +49,7 @@ def get_smtp_settings() -> tuple[str, int, str, int, bool, str]:
     from_addr = os.getenv("SMTP_FROM", "").strip()
     timeout_raw = os.getenv("SMTP_TIMEOUT", "10").strip()
     enabled = os.getenv("SMTP_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
-    email_format = os.getenv("SMTP_EMAIL_FORMAT", "html").strip().lower()
+    email_format = os.getenv("SMTP_EMAIL_FORMAT", "html").split("#", 1)[0].strip().lower()
 
     missing = [name for name, value in (("SMTP_HOST", host), ("SMTP_FROM", from_addr)) if not value]
     if missing:

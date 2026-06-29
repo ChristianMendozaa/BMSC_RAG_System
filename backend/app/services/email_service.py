@@ -15,6 +15,7 @@ import asyncio
 import email.utils
 import logging
 import smtplib
+import textwrap
 import unicodedata
 from email.message import EmailMessage
 from email.mime.image import MIMEImage
@@ -58,14 +59,31 @@ def _to_7bit_text(value: str) -> str:
     return unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
 
 
+def _wrap_7bit_body(value: str) -> str:
+    lines: list[str] = []
+    for line in _to_7bit_text(value).splitlines():
+        if not line or line.startswith(" "):
+            lines.append(line)
+            continue
+        lines.extend(textwrap.wrap(line, width=72, break_long_words=False, break_on_hyphens=False) or [""])
+    return "\n".join(lines)
+
+
+def _smtp_email_format() -> str:
+    return settings.smtp_email_format.split("#", 1)[0].strip().lower()
+
+
 def _build_plain_message(
     to_addr: str,
     subject: str,
     body_plain: str,
 ) -> EmailMessage:
     msg = EmailMessage()
-    _add_common_headers(msg, to_addr, _to_7bit_text(subject))
-    msg.set_content(_to_7bit_text(body_plain).rstrip() + "\n\n")
+    msg["Subject"] = _to_7bit_text(subject)
+    msg["From"] = email.utils.formataddr((BRAND_NAME, settings.smtp_from))
+    msg["To"] = to_addr
+    msg["Date"] = email.utils.formatdate(localtime=True)
+    msg.set_content(_wrap_7bit_body(body_plain).rstrip() + "\n\n", cte="7bit")
     return msg
 
 
@@ -100,7 +118,7 @@ def _build_smtp_message(
     body_html: str,
     body_plain: str,
 ) -> MIMEMultipart | EmailMessage:
-    email_format = settings.smtp_email_format.strip().lower()
+    email_format = _smtp_email_format()
     if email_format == "plain":
         return _build_plain_message(to_addr, subject, body_plain)
     if email_format != "html":
@@ -122,7 +140,7 @@ def _send_sync(
 
     with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=settings.smtp_timeout) as s:
         s.ehlo()
-        s.sendmail(settings.smtp_from, [to_addr], msg.as_bytes())
+        s.send_message(msg, from_addr=settings.smtp_from, to_addrs=[to_addr])
 
     logger.info("[email] Enviado a %s — Asunto: %s", to_addr, subject)
 
