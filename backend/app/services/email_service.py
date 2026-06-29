@@ -15,6 +15,7 @@ import asyncio
 import email.utils
 import logging
 import smtplib
+from email.message import EmailMessage
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -42,13 +43,7 @@ def _message_id_domain(from_addr: str) -> str | None:
     return domain or None
 
 
-def _build_mime_message(
-    to_addr: str,
-    subject: str,
-    body_html: str,
-    body_plain: str,
-) -> MIMEMultipart:
-    msg = MIMEMultipart("related")
+def _add_common_headers(msg: MIMEMultipart | EmailMessage, to_addr: str, subject: str) -> None:
     msg["Subject"] = subject
     msg["From"] = email.utils.formataddr((BRAND_NAME, settings.smtp_from))
     msg["To"] = to_addr
@@ -56,6 +51,27 @@ def _build_mime_message(
     msg["Message-ID"] = email.utils.make_msgid(domain=_message_id_domain(settings.smtp_from))
     msg["Auto-Submitted"] = "auto-generated"
     msg["X-Mailer"] = "BMSC-Base-de-Conocimiento"
+
+
+def _build_plain_message(
+    to_addr: str,
+    subject: str,
+    body_plain: str,
+) -> EmailMessage:
+    msg = EmailMessage()
+    _add_common_headers(msg, to_addr, subject)
+    msg.set_content(body_plain.rstrip() + "\n\n", charset="utf-8")
+    return msg
+
+
+def _build_mime_message(
+    to_addr: str,
+    subject: str,
+    body_html: str,
+    body_plain: str,
+) -> MIMEMultipart:
+    msg = MIMEMultipart("related")
+    _add_common_headers(msg, to_addr, subject)
 
     alternative = MIMEMultipart("alternative")
     alternative.attach(MIMEText(body_plain, "plain", "utf-8"))
@@ -73,6 +89,20 @@ def _build_mime_message(
     return msg
 
 
+def _build_smtp_message(
+    to_addr: str,
+    subject: str,
+    body_html: str,
+    body_plain: str,
+) -> MIMEMultipart | EmailMessage:
+    email_format = settings.smtp_email_format.strip().lower()
+    if email_format == "plain":
+        return _build_plain_message(to_addr, subject, body_plain)
+    if email_format != "html":
+        logger.warning("[email] SMTP_EMAIL_FORMAT inválido: %s. Usando html.", settings.smtp_email_format)
+    return _build_mime_message(to_addr, subject, body_html, body_plain)
+
+
 def _send_sync(
     to_addr: str,
     subject: str,
@@ -83,7 +113,7 @@ def _send_sync(
     Envía un email de forma síncrona (se llama desde un thread del executor).
     Usa SMTP plano en el puerto 25 sin TLS ni autenticación.
     """
-    msg = _build_mime_message(to_addr, subject, body_html, body_plain)
+    msg = _build_smtp_message(to_addr, subject, body_html, body_plain)
 
     with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=settings.smtp_timeout) as s:
         s.ehlo()

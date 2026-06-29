@@ -21,6 +21,8 @@ import smtplib
 import socket
 import sys
 from email.message import EmailMessage
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 
 
@@ -40,13 +42,14 @@ def load_env_file(path: Path = ENV_PATH) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
-def get_smtp_settings() -> tuple[str, int, str, int, bool]:
+def get_smtp_settings() -> tuple[str, int, str, int, bool, str]:
     load_env_file()
     host = os.getenv("SMTP_HOST", "").strip()
     port_raw = os.getenv("SMTP_PORT", "25").strip()
     from_addr = os.getenv("SMTP_FROM", "").strip()
     timeout_raw = os.getenv("SMTP_TIMEOUT", "10").strip()
     enabled = os.getenv("SMTP_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    email_format = os.getenv("SMTP_EMAIL_FORMAT", "html").strip().lower()
 
     missing = [name for name, value in (("SMTP_HOST", host), ("SMTP_FROM", from_addr)) if not value]
     if missing:
@@ -58,10 +61,13 @@ def get_smtp_settings() -> tuple[str, int, str, int, bool]:
     except ValueError as exc:
         raise SystemExit("SMTP_PORT and SMTP_TIMEOUT must be integers") from exc
 
-    return host, port, from_addr, timeout, enabled
+    if email_format not in {"plain", "html"}:
+        raise SystemExit("SMTP_EMAIL_FORMAT must be plain or html")
+
+    return host, port, from_addr, timeout, enabled, email_format
 
 
-def build_message(from_addr: str, to_addr: str) -> EmailMessage:
+def build_plain_message(from_addr: str, to_addr: str) -> EmailMessage:
     msg = EmailMessage()
     msg["Subject"] = "BMSC Base de Conocimiento | Prueba SMTP"
     msg["From"] = email.utils.formataddr(("BMSC Base de Conocimiento", from_addr))
@@ -70,12 +76,43 @@ def build_message(from_addr: str, to_addr: str) -> EmailMessage:
     msg.set_content(
         "Este es un correo de prueba enviado por BMSC Base de Conocimiento.\n"
         "Si lo recibiste, SMTP_HOST, SMTP_PORT y SMTP_FROM estan funcionando.\n"
+        "\n"
     )
     return msg
 
 
+def build_html_message(from_addr: str, to_addr: str) -> MIMEMultipart:
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "BMSC Base de Conocimiento | Prueba SMTP"
+    msg["From"] = email.utils.formataddr(("BMSC Base de Conocimiento", from_addr))
+    msg["To"] = to_addr
+    msg["Date"] = email.utils.formatdate(localtime=True)
+    plain = (
+        "Este es un correo de prueba HTML enviado por BMSC Base de Conocimiento.\n"
+        "Si lo recibiste, el relay acepta multipart/alternative.\n\n"
+    )
+    html = """\
+<!DOCTYPE html>
+<html>
+  <body>
+    <p>Este es un correo de prueba HTML enviado por BMSC Base de Conocimiento.</p>
+    <p>Si lo recibiste, el relay acepta multipart/alternative.</p>
+  </body>
+</html>
+"""
+    msg.attach(MIMEText(plain, "plain", "utf-8"))
+    msg.attach(MIMEText(html, "html", "utf-8"))
+    return msg
+
+
+def build_message(from_addr: str, to_addr: str, email_format: str) -> EmailMessage | MIMEMultipart:
+    if email_format == "plain":
+        return build_plain_message(from_addr, to_addr)
+    return build_html_message(from_addr, to_addr)
+
+
 def run_relay_check(to_addr: str, dry_run: bool) -> int:
-    host, port, from_addr, timeout, enabled = get_smtp_settings()
+    host, port, from_addr, timeout, enabled, email_format = get_smtp_settings()
 
     print("SMTP relay check")
     print(f"  env file     : {ENV_PATH}")
@@ -83,6 +120,7 @@ def run_relay_check(to_addr: str, dry_run: bool) -> int:
     print(f"  SMTP_PORT    : {port}")
     print(f"  SMTP_FROM    : {from_addr}")
     print(f"  SMTP_ENABLED : {enabled}")
+    print(f"  EMAIL_FORMAT : {email_format}")
     print(f"  recipient    : {to_addr}")
     print(f"  dry run      : {dry_run}")
     print()
@@ -122,7 +160,7 @@ def run_relay_check(to_addr: str, dry_run: bool) -> int:
                 return 0
 
             smtp.rset()
-            msg = build_message(from_addr, to_addr)
+            msg = build_message(from_addr, to_addr, email_format)
             refused = smtp.send_message(msg, from_addr=from_addr, to_addrs=[to_addr])
             if refused:
                 print(f"FAIL: relay refused recipients during DATA/send: {refused}")

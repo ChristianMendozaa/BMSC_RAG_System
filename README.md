@@ -997,6 +997,7 @@ All variables read from `.env` via Pydantic `Settings` (`backend/app/config.py`)
 | `SMTP_FROM` | — | Authorized sender address shown as email remitente; configure in `backend/.env` |
 | `SMTP_TIMEOUT` | `10` | SMTP network timeout in seconds |
 | `SMTP_ENABLED` | `true` | `false` logs email actions without contacting the relay |
+| `SMTP_EMAIL_FORMAT` | `html` | `plain` sends text-only transactional emails for stricter relays; `html` keeps the branded multipart template |
 
 Manual relay check from the VM:
 

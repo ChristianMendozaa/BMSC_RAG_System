@@ -7,7 +7,7 @@ from app.emails.messages import (
 )
 from app.emails.renderer import BRAND_NAME, LOGO_CID
 from app.services import email_service
-from app.services.email_service import _build_mime_message
+from app.services.email_service import _build_mime_message, _build_smtp_message
 
 
 FORBIDDEN_BRAND_TERMS = (
@@ -105,3 +105,27 @@ def test_email_mime_message_includes_plain_html_and_inline_logo(monkeypatch):
         and part.get_content_disposition() == "inline"
     ]
     assert len(inline_logos) == 1
+
+
+def test_email_smtp_message_can_be_plain_text(monkeypatch):
+    monkeypatch.setattr(email_service.settings, "smtp_from", "no-reply@bmsc.com.bo")
+    monkeypatch.setattr(email_service.settings, "smtp_email_format", "plain")
+    email = build_account_created_email(
+        to_addr="usuario@bmsc.com.bo",
+        username="usuario",
+        temporary_password="Temporal1234",
+        role_name="Analista",
+    )
+
+    msg = _build_smtp_message(
+        to_addr="usuario@bmsc.com.bo",
+        subject=email.subject,
+        body_html=email.body_html,
+        body_plain=email.body_plain,
+    )
+
+    assert msg.get_content_type() == "text/plain"
+    assert "Tu cuenta en BMSC Base de Conocimiento fue creada." in msg.get_content()
+    assert "Contraseña temporal: Temporal1234" in msg.get_content()
+    assert msg.get_content().endswith("\n\n")
+    assert not msg.is_multipart()

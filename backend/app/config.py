@@ -108,6 +108,7 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_timeout: int = 10          # segundos; evita bloquear el startup si el relay no responde
     smtp_enabled: bool = False      # False → las notificaciones se loguan pero no se envían
+    smtp_email_format: str = "html" # html | plain; plain evita problemas con relays que alteran MIME HTML
 
 
 settings = Settings()
