@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     # Bloqueo por intentos fallidos de login (no aplica a usuarios is_system)
     max_login_attempts: int = 5
     lockout_minutes: int = 15
+    require_bmsc_email_domain: bool = True
 
     # Seed de usuario inicial
     initial_admin_username: str = "admin"

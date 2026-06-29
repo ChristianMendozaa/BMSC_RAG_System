@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.dependencies import require_permission
 from app.core.security import get_password_hash
 from app.db.models.collection import Collection
@@ -38,6 +39,7 @@ TEMPORARY_PASSWORD_SYMBOLS = "!@#$%&*"
 TEMPORARY_PASSWORD_ALPHABET = (
     TEMPORARY_PASSWORD_LETTERS + TEMPORARY_PASSWORD_DIGITS + TEMPORARY_PASSWORD_SYMBOLS
 )
+BMSC_EMAIL_DOMAIN = "@bmsc.com.bo"
 
 
 def _generate_temporary_password(length: int = TEMPORARY_PASSWORD_LENGTH) -> str:
@@ -58,6 +60,16 @@ def _resolve_temporary_password(password: str | None) -> str:
     if password and password.strip():
         return password
     return _generate_temporary_password()
+
+
+def _normalize_user_email(email: str) -> str:
+    email_normalized = email.strip().lower()
+    if settings.require_bmsc_email_domain and not email_normalized.endswith(BMSC_EMAIL_DOMAIN):
+        raise HTTPException(
+            status_code=400,
+            detail=f"El correo debe pertenecer al dominio {BMSC_EMAIL_DOMAIN}",
+        )
+    return email_normalized
 
 
 @router.get("", response_model=UsersListResponse)
@@ -93,7 +105,7 @@ async def create_user(
     db: AsyncSession = Depends(get_pg_db),
     current_user: PGUser = Depends(require_permission("can_manage_users")),
 ):
-    email_normalized = body.email.strip().lower()
+    email_normalized = _normalize_user_email(str(body.email))
     temporary_password = _resolve_temporary_password(body.password)
     # Derivar nombre visible de la parte antes del @
     username_derived = email_normalized.split("@")[0]
@@ -340,7 +352,7 @@ async def update_email(
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     if user.is_system:
         raise HTTPException(status_code=400, detail="No se puede cambiar el correo del administrador del sistema")
-    email_normalized = body.email.strip().lower()
+    email_normalized = _normalize_user_email(str(body.email))
     user.email = email_normalized
     user.username = email_normalized.split("@")[0]
     try:
