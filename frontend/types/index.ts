@@ -68,12 +68,28 @@ export interface Message {
   sources: Source[];
   isStreaming?: boolean;
   statusMessage?: string;
+  traceEvents?: AgentTraceEvent[];
+  mode?: ChatMode;
+}
+
+export type ChatMode = 'fast' | 'agentic';
+
+export interface AgentTraceEvent {
+  id: string;
+  stage: string;
+  title: string;
+  detail?: string | null;
+  status: 'running' | 'completed' | 'error';
 }
 
 export type ChatStatusStage =
   | 'preparing'
   | 'retrieving'
   | 'reranking'
+  | 'agent_searching'
+  | 'agent_assessing'
+  | 'agent_expanding'
+  | 'agent_finalizing'
   | 'queued'
   | 'prefilling'
   | 'generating'
@@ -84,6 +100,7 @@ export interface ChatRequest {
   session_id: string | null;
   collection_id: string | null;
   document_ids: string[] | null;
+  mode?: ChatMode;
 }
 
 export interface ChatSessionListItem {

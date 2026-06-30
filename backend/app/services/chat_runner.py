@@ -23,7 +23,7 @@ from app.db.models.chat_message import ChatMessage
 from app.db.models.chat_session import ChatSession
 from app.db.session import PGAsyncSessionLocal as AsyncSessionLocal
 from app.cache import response_cache
-from app.services import rag
+from app.services import rag, rag_agent
 
 logger = logging.getLogger(__name__)
 
@@ -72,11 +72,13 @@ class ActiveGeneration:
     session_id: str
     message: str
     allowed_doc_ids: list[str]
+    mode: str
     cancel_flag: threading.Event
     subscribers: set
     done: asyncio.Event
     text: str = ""
     sources: list[dict] = dataclasses.field(default_factory=list)
+    trace_events: list[dict] = dataclasses.field(default_factory=list)
     status: str = "running"   # running | done | stopped | error
     stage: str = "preparing"
     stage_message: str = "Preparando consulta"
@@ -118,8 +120,12 @@ async def subscribe(gen: ActiveGeneration) -> asyncio.Queue:
         # Replay accumulated text so the subscriber starts in sync
         if gen.text:
             await q.put(json.dumps({"type": "token", "content": gen.text}))
+        for event in gen.trace_events:
+            await q.put(json.dumps({"type": "trace", **event}))
     else:
         # Already finished — seed the queue with the terminal state immediately
+        for event in gen.trace_events:
+            await q.put(json.dumps({"type": "trace", **event}))
         if gen.text:
             await q.put(json.dumps({"type": "token", "content": gen.text}))
         _put_terminal(gen, q)
@@ -169,6 +175,24 @@ async def _set_stage(gen: ActiveGeneration, stage: str, message: str) -> None:
     }))
 
 
+async def _add_trace(
+    gen: ActiveGeneration,
+    stage: str,
+    title: str,
+    detail: str | None = None,
+    status: str = "running",
+) -> None:
+    event = {
+        "id": f"{len(gen.trace_events) + 1}",
+        "stage": stage,
+        "title": title,
+        "detail": detail,
+        "status": status,
+    }
+    gen.trace_events.append(event)
+    await _broadcast(gen, json.dumps({"type": "trace", **event}))
+
+
 def _cleanup(session_id: str) -> None:
     _active.pop(session_id, None)
 
@@ -177,11 +201,13 @@ def start(
     session_id: str,
     message: str,
     allowed_doc_ids: list[str],
+    mode: str = "fast",
 ) -> ActiveGeneration:
     gen = ActiveGeneration(
         session_id=session_id,
         message=message,
         allowed_doc_ids=allowed_doc_ids,
+        mode=mode if mode in {"fast", "agentic"} else "fast",
         cancel_flag=threading.Event(),
         subscribers=set(),
         done=asyncio.Event(),
@@ -209,7 +235,9 @@ async def _run(gen: ActiveGeneration) -> None:
 
         t0 = time.perf_counter()
         cached = (
-            await asyncio.to_thread(response_cache.get, gen.message, gen.allowed_doc_ids)
+            await asyncio.to_thread(
+                response_cache.get, gen.message, gen.allowed_doc_ids, gen.mode
+            )
             if is_first_turn else None
         )
         _perf_log(
@@ -236,12 +264,23 @@ async def _run(gen: ActiveGeneration) -> None:
             await _broadcast(gen, payload)
             return
 
-        text_contexts, image_sources = await rag.build_context(
-            gen.message,
-            gen.allowed_doc_ids,
-            history=history,
-            status_callback=lambda stage, message: _set_stage(gen, stage, message),
-        )
+        if gen.mode == "agentic":
+            text_contexts, image_sources = await rag_agent.build_agentic_context(
+                gen.message,
+                gen.allowed_doc_ids,
+                history=history,
+                status_callback=lambda stage, message: _set_stage(gen, stage, message),
+                trace_callback=lambda stage, title, detail=None, status="running": _add_trace(
+                    gen, stage, title, detail, status
+                ),
+            )
+        else:
+            text_contexts, image_sources = await rag.build_context(
+                gen.message,
+                gen.allowed_doc_ids,
+                history=history,
+                status_callback=lambda stage, message: _set_stage(gen, stage, message),
+            )
 
         final_sources = None
         async for token, sources in rag.stream_chat(
@@ -280,7 +319,7 @@ async def _run(gen: ActiveGeneration) -> None:
             if is_first_turn and gen.text and sources_data:
                 await asyncio.to_thread(
                     response_cache.set,
-                    gen.message, gen.allowed_doc_ids, gen.text, sources_data,
+                    gen.message, gen.allowed_doc_ids, gen.text, sources_data, gen.mode,
                 )
             _perf_log("TOTAL chat: %.3fs", time.perf_counter() - t_total)
             payload = json.dumps({

@@ -100,6 +100,7 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     collection_id: str | None = None
     document_ids: list[str] | None = None
+    mode: Literal["fast", "agentic"] = "fast"
 
 
 class BlockerItem(BaseModel):

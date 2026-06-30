@@ -9,7 +9,7 @@ import {
   useState,
 } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import type { ChatRequest, Source } from '@/types';
+import type { AgentTraceEvent, ChatMode, ChatRequest, Source } from '@/types';
 import {
   getActiveGeneration,
   resumeStream,
@@ -23,6 +23,8 @@ export interface StreamEntry {
   status: 'streaming' | 'done' | 'stopped' | 'error';
   stage?: string;
   statusMessage?: string;
+  traceEvents: AgentTraceEvent[];
+  mode: ChatMode;
   error?: string;
 }
 
@@ -71,6 +73,17 @@ export function ChatStreamProvider({ children }: { children: React.ReactNode }) 
     });
   }, []);
 
+  const _appendTrace = useCallback((key: string, event: AgentTraceEvent) => {
+    setStreams((prev) => {
+      const entry = prev.get(key);
+      if (!entry) return prev;
+      const withoutSameId = entry.traceEvents.filter((item) => item.id !== event.id);
+      const next = new Map(prev);
+      next.set(key, { ...entry, traceEvents: [...withoutSameId, event] });
+      return next;
+    });
+  }, []);
+
   const clearStream = useCallback((sessionId: string) => {
     setStreams((prev) => {
       if (!prev.has(sessionId)) return prev;
@@ -92,7 +105,13 @@ export function ChatStreamProvider({ children }: { children: React.ReactNode }) 
       const ctrl = new AbortController();
       abortRefs.current.set(tempKey, ctrl);
 
-      _upsert(tempKey, { content: '', sources: [], status: 'streaming' });
+      _upsert(tempKey, {
+        content: '',
+        sources: [],
+        status: 'streaming',
+        traceEvents: [],
+        mode: request.mode ?? 'fast',
+      });
 
       let resolvedKey = tempKey;
 
@@ -121,6 +140,9 @@ export function ChatStreamProvider({ children }: { children: React.ReactNode }) 
         onStatus: (stage, message) => {
           _update(resolvedKey, { stage, statusMessage: message });
         },
+        onTrace: (event) => {
+          _appendTrace(resolvedKey, event);
+        },
         onToken: (token) => {
           setStreams((prev) => {
             const entry = prev.get(resolvedKey);
@@ -146,7 +168,7 @@ export function ChatStreamProvider({ children }: { children: React.ReactNode }) 
 
       return tempKey;
     },
-    [_upsert, _update],
+    [_appendTrace, _upsert, _update],
   );
 
   const stopStream = useCallback((sessionId: string) => {
@@ -176,6 +198,8 @@ export function ChatStreamProvider({ children }: { children: React.ReactNode }) 
           status: 'streaming',
           stage: info.stage,
           statusMessage: info.stage_message,
+          traceEvents: info.trace_events ?? [],
+          mode: info.mode ?? 'fast',
         });
 
         const ctrl = new AbortController();
@@ -186,6 +210,9 @@ export function ChatStreamProvider({ children }: { children: React.ReactNode }) 
           onSession: () => {},
           onStatus: (stage, message) => {
             _update(sessionId, { stage, statusMessage: message });
+          },
+          onTrace: (event) => {
+            _appendTrace(sessionId, event);
           },
           onToken: (token) => {
             setStreams((prev) => {
@@ -214,7 +241,7 @@ export function ChatStreamProvider({ children }: { children: React.ReactNode }) 
         attachingRef.current.delete(sessionId);
       }
     },
-    [streams, _upsert, _update],
+    [streams, _appendTrace, _upsert, _update],
   );
 
   const ctxValue = useMemo(

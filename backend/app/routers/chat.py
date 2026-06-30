@@ -230,7 +230,7 @@ async def chat(
     if chat_runner.is_running(session_id):
         raise HTTPException(status_code=409, detail="Ya hay una generación en curso para esta sesión")
 
-    gen = chat_runner.start(session_id, request.message, allowed_doc_ids)
+    gen = chat_runner.start(session_id, request.message, allowed_doc_ids, request.mode)
     return EventSourceResponse(_make_subscriber_generator(gen, session_id))
 
 
@@ -291,6 +291,8 @@ async def get_active_generation(
         "status": gen.status,
         "stage": gen.stage,
         "stage_message": gen.stage_message,
+        "mode": gen.mode,
+        "trace_events": gen.trace_events,
         "text": gen.text,
     }
 
