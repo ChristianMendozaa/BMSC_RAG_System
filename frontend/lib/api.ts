@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type {
   BlockerItem,
   ChatRequest,
+  ChatStatusStage,
   ChatSessionDetail,
   ChatSessionListItem,
   DocumentDetail,
@@ -801,6 +802,7 @@ export async function getConversationHistory(sessionId: string): Promise<Message
 
 export interface ChatStreamHandlers {
   onSession?: (sessionId: string) => void;
+  onStatus?: (stage: ChatStatusStage | string, message: string) => void;
   onToken: (token: string) => void;
   onDone: (sessionId: string, sources: Source[], opts?: { stopped?: boolean }) => void;
   onError: (err: Error) => void;
@@ -811,7 +813,7 @@ async function _consumeSSE(
   body: ReadableStream<Uint8Array>,
   handlers: ChatStreamHandlers,
 ): Promise<void> {
-  const { onSession, onToken, onDone, onError } = handlers;
+  const { onSession, onStatus, onToken, onDone, onError } = handlers;
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -835,6 +837,7 @@ async function _consumeSSE(
           const payload = JSON.parse(raw) as {
             type: string;
             content?: string;
+            stage?: ChatStatusStage | string;
             session_id?: string;
             sources?: Source[];
             message?: string;
@@ -843,6 +846,8 @@ async function _consumeSSE(
 
           if (payload.type === 'session' && payload.session_id) {
             onSession?.(payload.session_id);
+          } else if (payload.type === 'status' && payload.stage) {
+            onStatus?.(payload.stage, payload.message ?? '');
           } else if (payload.type === 'token' && payload.content) {
             onToken(payload.content);
           } else if (payload.type === 'done') {
@@ -909,7 +914,7 @@ export async function stopChat(sessionId: string): Promise<void> {
 
 export async function getActiveGeneration(
   sessionId: string,
-): Promise<{ active: boolean; status: string; text: string }> {
+): Promise<{ active: boolean; status: string; stage?: string; stage_message?: string; text: string }> {
   const res = await fetch(`${API_URL}/api/chat/${sessionId}/active`, {
     headers: getAuthHeaders(),
   });

@@ -21,6 +21,8 @@ export interface StreamEntry {
   content: string;
   sources: Source[];
   status: 'streaming' | 'done' | 'stopped' | 'error';
+  stage?: string;
+  statusMessage?: string;
   error?: string;
 }
 
@@ -116,6 +118,9 @@ export function ChatStreamProvider({ children }: { children: React.ReactNode }) 
             opts.onNewSession(realId, tempKey);
           }
         },
+        onStatus: (stage, message) => {
+          _update(resolvedKey, { stage, statusMessage: message });
+        },
         onToken: (token) => {
           setStreams((prev) => {
             const entry = prev.get(resolvedKey);
@@ -169,6 +174,8 @@ export function ChatStreamProvider({ children }: { children: React.ReactNode }) 
           content: info.text,
           sources: [],
           status: 'streaming',
+          stage: info.stage,
+          statusMessage: info.stage_message,
         });
 
         const ctrl = new AbortController();
@@ -177,6 +184,9 @@ export function ChatStreamProvider({ children }: { children: React.ReactNode }) 
         resumeStream(sessionId, {
           signal: ctrl.signal,
           onSession: () => {},
+          onStatus: (stage, message) => {
+            _update(sessionId, { stage, statusMessage: message });
+          },
           onToken: (token) => {
             setStreams((prev) => {
               const entry = prev.get(sessionId);

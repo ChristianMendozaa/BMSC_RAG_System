@@ -4,7 +4,7 @@ import math
 import threading
 import time
 import uuid
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Awaitable, Callable
 
 from sqlalchemy import select
 
@@ -16,6 +16,7 @@ from app.utils.model_manager import get_chat_llm
 from app.utils.inference_queue import inference_queue
 
 logger = logging.getLogger(__name__)
+StatusCallback = Callable[[str, str], Awaitable[None]]
 
 
 def _perf_log(msg: str, *args) -> None:
@@ -144,12 +145,15 @@ async def build_context(
     message: str,
     document_ids: list[str] | None,
     history: list[dict] | None = None,
+    status_callback: StatusCallback | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """
     Devuelve (text_contexts, image_sources) — ambos rerankeados, top rerank_top_k en total.
     Las image_sources llevan el campo 'content' con la descripción de la imagen para el prompt.
     """
     t_build_start = time.perf_counter()
+    if status_callback:
+        await status_callback("retrieving", "Buscando fragmentos relevantes")
 
     search_query = message
     if history:
@@ -217,6 +221,9 @@ async def build_context(
         )
         return [], []
 
+    if status_callback:
+        await status_callback("reranking", "Ordenando evidencia")
+
     # Presupuesto efectivo: escala con el número de documentos en multi-doc
     effective_top_k = settings.rerank_top_k
     if multi:
@@ -271,8 +278,9 @@ def _build_sources(
     return sources
 
 
-_MAX_TEXT_CHUNK_CHARS = 1300
-_MAX_HISTORY_TURN_CHARS = 500
+_MAX_TEXT_CHUNK_CHARS = 900
+_MAX_IMAGE_DESC_CHARS = 900
+_MAX_HISTORY_TURN_CHARS = 300
 
 
 def _truncate(text: str, max_chars: int) -> str:
@@ -281,11 +289,74 @@ def _truncate(text: str, max_chars: int) -> str:
     return text[:max_chars].rstrip() + "…"
 
 
+def _count_prompt_tokens(messages: list[dict]) -> int:
+    text = "\n".join(str(m.get("content", "")) for m in messages)
+    try:
+        llm = get_chat_llm()
+        return len(llm.tokenize(text.encode("utf-8"), add_bos=False))
+    except Exception:
+        return max(1, len(text) // 4)
+
+
 def _build_messages(
     message: str,
     text_contexts: list[dict],
     image_sources: list[dict],
     history: list[dict],
+) -> list[dict]:
+    text_max_chars = _MAX_TEXT_CHUNK_CHARS
+    image_max_chars = _MAX_IMAGE_DESC_CHARS
+    history_max_chars = _MAX_HISTORY_TURN_CHARS
+    budget = max(512, settings.chat_prompt_token_budget)
+
+    messages = _build_messages_with_limits(
+        message,
+        text_contexts,
+        image_sources,
+        history,
+        text_max_chars,
+        image_max_chars,
+        history_max_chars,
+    )
+
+    while _count_prompt_tokens(messages) > budget and (
+        text_max_chars > 500 or image_max_chars > 500 or history_max_chars > 0
+    ):
+        if history_max_chars > 0:
+            history_max_chars = 0
+        elif text_max_chars > 500:
+            text_max_chars -= 100
+        elif image_max_chars > 500:
+            image_max_chars -= 100
+        messages = _build_messages_with_limits(
+            message,
+            text_contexts,
+            image_sources,
+            history,
+            text_max_chars,
+            image_max_chars,
+            history_max_chars,
+        )
+
+    _perf_log(
+        "prompt: %d tokens aprox (budget=%d, text_chars=%d, image_chars=%d, hist_chars=%d)",
+        _count_prompt_tokens(messages),
+        budget,
+        text_max_chars,
+        image_max_chars,
+        history_max_chars,
+    )
+    return messages
+
+
+def _build_messages_with_limits(
+    message: str,
+    text_contexts: list[dict],
+    image_sources: list[dict],
+    history: list[dict],
+    text_max_chars: int,
+    image_max_chars: int,
+    history_max_chars: int,
 ) -> list[dict]:
     context_text = ""
     item_num = 1
@@ -295,7 +366,7 @@ def _build_messages(
         if ctx.get("page"):
             src += f", página {ctx['page']}"
         src += "]"
-        context_text += f"\n{src}\n{_truncate(ctx['content'], _MAX_TEXT_CHUNK_CHARS)}\n"
+        context_text += f"\n{src}\n{_truncate(ctx['content'], text_max_chars)}\n"
         item_num += 1
 
     for img in image_sources:
@@ -306,16 +377,17 @@ def _build_messages(
         if img.get("page"):
             src += f", página {img['page']}"
         src += "]"
-        context_text += f"\n{src}\n{_truncate(desc, _MAX_TEXT_CHUNK_CHARS)}\n"
+        context_text += f"\n{src}\n{_truncate(desc, image_max_chars)}\n"
         item_num += 1
 
     context_block = context_text.strip()
 
     history_text = ""
     # Solo los 2 últimos turnos y truncados: evita reinyectar respuestas largas en cada prefill
-    for turn in history[-2:]:
-        label = "Usuario" if turn["role"] == "user" else "Asistente"
-        history_text += f"{label}: {_truncate(turn['content'], _MAX_HISTORY_TURN_CHARS)}\n"
+    if history_max_chars > 0:
+        for turn in history[-2:]:
+            label = "Usuario" if turn["role"] == "user" else "Asistente"
+            history_text += f"{label}: {_truncate(turn['content'], history_max_chars)}\n"
 
     # Cabecera explícita de documentos en scope (solo en multi-doc) para que el LLM
     # sepa cuántos documentos hay y los mencione todos en respuestas de conjunto.
@@ -348,6 +420,7 @@ async def stream_chat(
     image_sources: list[dict],
     history: list[dict],
     cancel_flag: threading.Event | None = None,
+    status_callback: StatusCallback | None = None,
 ) -> AsyncGenerator[tuple[str, list[Source] | None], None]:
     messages = _build_messages(message, text_contexts, image_sources, history)
     sources = _build_sources(text_contexts, image_sources)
@@ -396,9 +469,14 @@ async def stream_chat(
             ).result(timeout=5)
 
     t_request = time.perf_counter()
-    async with inference_queue.acquire():
+    if status_callback:
+        await status_callback("queued", "Esperando turno de inferencia")
+    async with inference_queue.acquire(priority=0, label="chat"):
         _perf_log("cola-llm wait: %.3fs", time.perf_counter() - t_request)
+        if status_callback:
+            await status_callback("prefilling", "Preparando la respuesta")
         llm_task = loop.run_in_executor(None, _run_llm)
+        generation_status_sent = False
 
         try:
             while True:
@@ -407,6 +485,9 @@ async def stream_chat(
                     break
                 if isinstance(item, str) and item.startswith(_ERROR_PREFIX):
                     raise RuntimeError(item[len(_ERROR_PREFIX):])
+                if status_callback and not generation_status_sent:
+                    generation_status_sent = True
+                    await status_callback("generating", "Generando respuesta")
                 yield item, None
         finally:
             await llm_task

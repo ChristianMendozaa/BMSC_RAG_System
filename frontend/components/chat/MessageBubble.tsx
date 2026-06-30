@@ -366,7 +366,7 @@ export default function MessageBubble({ message }: Props) {
           }}
         >
           {message.isStreaming && !message.content ? (
-            <ThinkingIndicator />
+            <ThinkingIndicator message={message.statusMessage} />
           ) : useInterleavedLayout ? (
             <>
               {sections.map((section, i) => (

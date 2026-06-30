@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from typing import Any
 import asyncio
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ def _load_all_sync() -> None:
 
     total_cores = os.cpu_count() or 4
     n_threads = settings.llm_n_threads or max(1, total_cores - 2)
+    n_threads_batch = settings.llm_n_threads_batch or n_threads
 
     logger.info("=" * 60)
     if device == "cuda":
@@ -97,8 +99,9 @@ def _load_all_sync() -> None:
         chat_handler=vision_handler,
         n_ctx=settings.llm_n_ctx,
         n_batch=2048,        # mismo que el chat — prefill en un solo lote para imágenes de 272 tokens
+        n_ubatch=512,
         n_threads=n_threads,
-        n_threads_batch=n_threads,
+        n_threads_batch=n_threads_batch,
         n_gpu_layers=n_gpu_layers,  # 0 en CPU, -1 (todas) en CUDA
         use_mmap=False,
         use_mlock=True,
@@ -122,19 +125,42 @@ def _load_all_sync() -> None:
         )
 
     logger.info("      GGUF: %s", chat_path)
-    logger.info("      Hilos: %d", n_threads)
+    logger.info("      Hilos: %d / batch: %d", n_threads, n_threads_batch)
 
     _chat_llm = Llama(
         model_path=chat_path,
         n_ctx=settings.chat_n_ctx,
-        n_batch=2048,   # prefill en menos lotes -> mejor throughput (menor TTFT)
+        n_batch=settings.chat_n_batch,   # prefill en menos lotes -> mejor throughput (menor TTFT)
+        n_ubatch=settings.chat_n_ubatch,
         n_threads=n_threads,
-        n_threads_batch=n_threads,
+        n_threads_batch=n_threads_batch,
         n_gpu_layers=n_gpu_layers,  # 0 en CPU, -1 (todas) en CUDA
+        flash_attn=settings.chat_flash_attn,
         use_mmap=False,
         use_mlock=True,
         verbose=False,
     )
+    if settings.chat_prompt_cache_enabled:
+        from llama_cpp import LlamaRAMCache
+
+        cache_bytes = max(1, settings.chat_prompt_cache_mb) * 1024 * 1024
+        _chat_llm.set_cache(LlamaRAMCache(capacity_bytes=cache_bytes))
+        logger.info("      Prompt cache RAM: %d MB", settings.chat_prompt_cache_mb)
+
+    if settings.chat_warmup_enabled:
+        t0 = time.perf_counter()
+        try:
+            _chat_llm.create_chat_completion(
+                messages=[
+                    {"role": "system", "content": "Responde en español."},
+                    {"role": "user", "content": "OK"},
+                ],
+                max_tokens=1,
+                temperature=0.0,
+            )
+            logger.info("      Warmup chat: %.3fs", time.perf_counter() - t0)
+        except Exception as exc:
+            logger.warning("      Warmup chat omitido por error: %s", exc)
     logger.info("      Llama-3.2-3B (chat) listo.")
 
     from sentence_transformers import SentenceTransformer

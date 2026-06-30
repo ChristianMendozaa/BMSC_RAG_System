@@ -47,7 +47,15 @@ class Settings(BaseSettings):
     # LLM de chat: Llama-3.2-3B-Instruct GGUF — SOLO para generación de respuestas RAG (texto puro)
     chat_gguf_repo: str = "bartowski/Llama-3.2-3B-Instruct-GGUF"
     chat_gguf_filename: str = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-    chat_n_ctx: int = 8192
+    chat_n_ctx: int = 4096
+    chat_n_batch: int = 2048
+    chat_n_ubatch: int = 512
+    llm_n_threads_batch: int = 0  # 0 = usa el mismo valor efectivo que LLM_N_THREADS
+    chat_flash_attn: bool = False
+    chat_prompt_cache_enabled: bool = True
+    chat_prompt_cache_mb: int = 2048
+    chat_prompt_token_budget: int = 2600
+    chat_warmup_enabled: bool = True
     chat_max_tokens: int = 1024
     chat_temperature: float = 0.2   # casi determinista: máxima fidelidad al contexto
     chat_top_p: float = 0.9
@@ -69,10 +77,10 @@ class Settings(BaseSettings):
     skip_ocr: bool = False
 
     # Retrieval knobs
-    retrieval_top_k: int = 12   # candidatos que se piden a ChromaDB antes del reranking
+    retrieval_top_k: int = 8    # candidatos que se piden a ChromaDB antes del reranking
     rerank_top_k: int = 3       # items que pasan al prompt tras reranking (texto + imagen unificados)
     rerank_top_k_max: int = 6   # tope del presupuesto escalado en multi-doc
-    rerank_max_images: int = 6  # tope de descripciones de imagen que entran al reranker (coste CPU)
+    rerank_max_images: int = 3  # tope de descripciones de imagen que entran al reranker (coste CPU)
     retrieval_balanced_max_docs: int = 12  # por encima de este nº de docs se usa recuperación global
 
     # Performance logging (off por defecto; se activan desde .env)

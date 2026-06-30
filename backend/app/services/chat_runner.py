@@ -78,6 +78,8 @@ class ActiveGeneration:
     text: str = ""
     sources: list[dict] = dataclasses.field(default_factory=list)
     status: str = "running"   # running | done | stopped | error
+    stage: str = "preparing"
+    stage_message: str = "Preparando consulta"
     error: str | None = None
     task: "asyncio.Task | None" = None
 
@@ -108,6 +110,11 @@ async def subscribe(gen: ActiveGeneration) -> asyncio.Queue:
 
     if gen.status == "running":
         gen.subscribers.add(q)
+        await q.put(json.dumps({
+            "type": "status",
+            "stage": gen.stage,
+            "message": gen.stage_message,
+        }))
         # Replay accumulated text so the subscriber starts in sync
         if gen.text:
             await q.put(json.dumps({"type": "token", "content": gen.text}))
@@ -151,6 +158,17 @@ async def _broadcast(gen: ActiveGeneration, payload: str) -> None:
         await q.put(payload)
 
 
+async def _set_stage(gen: ActiveGeneration, stage: str, message: str) -> None:
+    gen.stage = stage
+    gen.stage_message = message
+    _perf_log("stage(%s): %s", stage, message)
+    await _broadcast(gen, json.dumps({
+        "type": "status",
+        "stage": stage,
+        "message": message,
+    }))
+
+
 def _cleanup(session_id: str) -> None:
     _active.pop(session_id, None)
 
@@ -177,6 +195,7 @@ async def _run(gen: ActiveGeneration) -> None:
     session_id = gen.session_id
     try:
         t_total = time.perf_counter()
+        await _set_stage(gen, "preparing", "Preparando consulta")
 
         t0 = time.perf_counter()
         history = await _get_history(session_id)
@@ -200,12 +219,14 @@ async def _run(gen: ActiveGeneration) -> None:
         )
 
         if cached is not None:
+            await _set_stage(gen, "cache_hit", "Recuperando respuesta cacheada")
             cached_text, cached_sources = cached
             await _save_turn(session_id, "assistant", cached_text, json.dumps(cached_sources))
             gen.text = cached_text
             gen.sources = cached_sources
             gen.status = "done"
             _perf_log("TOTAL chat (cache hit): %.3fs", time.perf_counter() - t_total)
+            await _broadcast(gen, json.dumps({"type": "token", "content": cached_text}))
             payload = json.dumps({
                 "type": "done",
                 "session_id": session_id,
@@ -219,6 +240,7 @@ async def _run(gen: ActiveGeneration) -> None:
             gen.message,
             gen.allowed_doc_ids,
             history=history,
+            status_callback=lambda stage, message: _set_stage(gen, stage, message),
         )
 
         final_sources = None
@@ -228,6 +250,7 @@ async def _run(gen: ActiveGeneration) -> None:
             image_sources=image_sources,
             history=history,
             cancel_flag=gen.cancel_flag,
+            status_callback=lambda stage, message: _set_stage(gen, stage, message),
         ):
             if sources is not None:
                 final_sources = sources

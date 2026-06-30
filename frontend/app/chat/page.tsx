@@ -699,6 +699,7 @@ export default function ChatPage() {
                         content: currentStream.content,
                         sources: [],
                         isStreaming: true,
+                        statusMessage: currentStream.statusMessage,
                       },
                     ]
                   : messages

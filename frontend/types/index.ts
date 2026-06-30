@@ -67,7 +67,17 @@ export interface Message {
   content: string;
   sources: Source[];
   isStreaming?: boolean;
+  statusMessage?: string;
 }
+
+export type ChatStatusStage =
+  | 'preparing'
+  | 'retrieving'
+  | 'reranking'
+  | 'queued'
+  | 'prefilling'
+  | 'generating'
+  | 'cache_hit';
 
 export interface ChatRequest {
   message: string;

@@ -5,17 +5,15 @@ import { useEffect, useState } from 'react';
 const STATUS_MESSAGES = [
   'Pensando…',
   'Consultando los documentos…',
-  'Cocinando una respuesta…',
   'Conectando ideas…',
   'Revisando el archivo…',
-  'Extrayendo lo bueno…',
   'Afinando los detalles…',
   'Casi listo…',
   'Procesando con cuidado…',
   'Buscando en las páginas…',
 ];
 
-export default function ThinkingIndicator() {
+export default function ThinkingIndicator({ message }: { message?: string }) {
   const [msgIndex, setMsgIndex] = useState(0);
 
   useEffect(() => {
@@ -56,7 +54,7 @@ export default function ThinkingIndicator() {
           animationDelay: '0.2s',
         }}
       >
-        {STATUS_MESSAGES[msgIndex]}
+        {message || STATUS_MESSAGES[msgIndex]}
       </span>
     </span>
   );

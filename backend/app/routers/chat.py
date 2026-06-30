@@ -289,6 +289,8 @@ async def get_active_generation(
     return {
         "active": gen.status == "running",
         "status": gen.status,
+        "stage": gen.stage,
+        "stage_message": gen.stage_message,
         "text": gen.text,
     }
 

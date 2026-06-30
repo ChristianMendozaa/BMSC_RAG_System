@@ -947,6 +947,7 @@ All variables read from `.env` via Pydantic `Settings` (`backend/app/config.py`)
 | `LLM_MMPROJ_FILENAME` | `mmproj-google_gemma-4-E4B-it-f16.gguf` | Multimodal projector filename |
 | `LLM_N_CTX` | `2048` | Vision context window (tokens); captioning needs ~860 |
 | `LLM_N_THREADS` | `0` | CPU threads (0 = auto: `cpu_count - 2`) |
+| `LLM_N_THREADS_BATCH` | `0` | CPU threads for prompt prefill batches (0 = same as `LLM_N_THREADS`) |
 | `VISION_MAX_TOKENS` | `256` | Max tokens per image caption |
 | `VISION_TEMPERATURE` | `0.1` | Caption sampling temperature (near-deterministic) |
 
@@ -955,7 +956,14 @@ All variables read from `.env` via Pydantic `Settings` (`backend/app/config.py`)
 |----------|---------|-------------|
 | `CHAT_GGUF_REPO` | `bartowski/Llama-3.2-3B-Instruct-GGUF` | HF repo |
 | `CHAT_GGUF_FILENAME` | `Llama-3.2-3B-Instruct-Q4_K_M.gguf` | GGUF filename |
-| `CHAT_N_CTX` | `8192` | Chat context window (tokens) |
+| `CHAT_N_CTX` | `4096` | Chat context window (tokens) |
+| `CHAT_N_BATCH` | `2048` | llama.cpp logical prompt batch size for chat prefill |
+| `CHAT_N_UBATCH` | `512` | llama.cpp physical micro-batch size for chat prefill |
+| `CHAT_FLASH_ATTN` | `false` | Enable llama.cpp flash attention when supported by the build/hardware |
+| `CHAT_PROMPT_CACHE_ENABLED` | `true` | Enable llama-cpp-python prompt/KV cache for repeated prefixes |
+| `CHAT_PROMPT_CACHE_MB` | `2048` | RAM budget for chat prompt cache |
+| `CHAT_PROMPT_TOKEN_BUDGET` | `2600` | Approximate max input prompt tokens before conservative truncation |
+| `CHAT_WARMUP_ENABLED` | `true` | Run a 1-token chat warmup at startup to reduce cold first request latency |
 | `CHAT_MAX_TOKENS` | `1024` | Max generated tokens per response |
 | `CHAT_TEMPERATURE` | `0.2` | Sampling temperature |
 | `CHAT_TOP_P` | `0.9` | Nucleus sampling threshold |
@@ -972,9 +980,9 @@ All variables read from `.env` via Pydantic `Settings` (`backend/app/config.py`)
 ### Retrieval Knobs
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RETRIEVAL_TOP_K` | `12` | Candidates fetched from ChromaDB before reranking |
+| `RETRIEVAL_TOP_K` | `8` | Candidates fetched from ChromaDB before reranking |
 | `RERANK_TOP_K` | `3` | Items passed to the LLM after reranking |
-| `RERANK_MAX_IMAGES` | `6` | Max image descriptions added to the rerank pool |
+| `RERANK_MAX_IMAGES` | `3` | Max image descriptions added to the rerank pool |
 
 ### Ingestion
 | Variable | Default | Description |

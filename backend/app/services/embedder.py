@@ -96,7 +96,7 @@ async def describe_image(image_bytes: bytes, page_context: str = "") -> str:
         )
         return response["choices"][0]["message"]["content"].strip()
 
-    async with inference_queue.acquire():
+    async with inference_queue.acquire(priority=10, label="vision"):
         result = await asyncio.to_thread(_run)
     return result
 
