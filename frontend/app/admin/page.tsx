@@ -12,7 +12,7 @@ import {
 import {
   getRoles, createRole, updateRole, deleteRole,
   getUsers, createUser, deactivateUser, activateUser, resetUserPassword, assignUserRole, changeUserEmail, deleteUserPermanent,
-  getCollections, createCollection, deleteCollection, CollectionHasDocumentsError,
+  getCollections, createCollection, updateCollection, deleteCollection, CollectionHasDocumentsError,
   getCollectionRolePerms, updateCollectionRolePerm,
   getCollectionUserPerms, updateCollectionUserPerm, deleteCollectionUserPerm,
   getPgDocuments, uploadToCollection, uploadPgDocument, downloadDocument, deletePgDocument,
@@ -1296,17 +1296,41 @@ function UserSearchInput({
 }
 
 function CollectionCard({
-  col, users, roles, onDeleted, flash,
-}: { col: CollectionOut; users: UserOut[]; roles: RoleInfo[]; onDeleted: () => void; flash: (msg: string, type?: 'ok' | 'err') => void }) {
+  col, users, roles, onChanged, flash,
+}: { col: CollectionOut; users: UserOut[]; roles: RoleInfo[]; onChanged: () => void; flash: (msg: string, type?: 'ok' | 'err') => void }) {
   const [open, setOpen] = useState(false);
   const [rolePerms, setRolePerms] = useState<RolePermEntry[]>([]);
   const [userPerms, setUserPerms] = useState<UserPermEntry[]>([]);
   const [addUser, setAddUser] = useState<UserOut | null>(null);
   const [searchResetKey, setSearchResetKey] = useState(0);
   const [loadingPerms, setLoadingPerms] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState({ name: col.name, description: col.description ?? '' });
+  const [editBusy, setEditBusy] = useState(false);
   const [deleteAction, setDeleteAction] = useState<'choose' | 'confirm-purge' | null>(null);
   const [deleteDocCount, setDeleteDocCount] = useState(0);
   const [deleteBusy, setDeleteBusy] = useState(false);
+
+  const openEditModal = () => {
+    setEditForm({ name: col.name, description: col.description ?? '' });
+    setEditOpen(true);
+  };
+
+  const saveCollectionDetails = async () => {
+    const name = editForm.name.trim();
+    const description = editForm.description.trim();
+    if (!name) return;
+    setEditBusy(true);
+    try {
+      await updateCollection(col.id, { name, description });
+      setEditOpen(false);
+      flash('Colección actualizada');
+      onChanged();
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'Error', 'err');
+    }
+    setEditBusy(false);
+  };
 
   const startDelete = async () => {
     setDeleteBusy(true);
@@ -1315,7 +1339,7 @@ function CollectionCard({
       const result = await deleteCollection(col.id, 'auto');
       if (result.deleted && !result.has_documents) {
         flash('Colección eliminada');
-        onDeleted();
+        onChanged();
       }
     } catch (err) {
       if (err instanceof CollectionHasDocumentsError) {
@@ -1338,7 +1362,7 @@ function CollectionCard({
           : `Colección y ${deleteDocCount} documento(s) eliminados permanentemente.`,
       );
       setDeleteAction(null);
-      onDeleted();
+      onChanged();
     } catch (err) {
       flash(err instanceof Error ? err.message : 'Error', 'err');
     }
@@ -1389,6 +1413,82 @@ function CollectionCard({
 
   return (
     <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border-subtle)' }}>
+      {/* Modal de edición de colección */}
+      <Dialog.Root open={editOpen} onOpenChange={(o) => { if (!editBusy) setEditOpen(o); }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+          <Dialog.Content
+            className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto"
+            style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <Dialog.Title
+                className="text-base font-semibold"
+                style={{ color: 'var(--gold-bright)', fontFamily: 'Playfair Display, serif' }}
+              >
+                Editar colección
+              </Dialog.Title>
+              {!editBusy && (
+                <Dialog.Close asChild>
+                  <button className="p-1 rounded-md" style={{ color: 'var(--text-muted)' }}>
+                    <X size={14} />
+                  </button>
+                </Dialog.Close>
+              )}
+            </div>
+
+            <Dialog.Description className="sr-only">
+              Cambiar nombre y descripción de la colección {col.name}
+            </Dialog.Description>
+
+            <div className="space-y-3">
+              <Input
+                type="text"
+                placeholder="Nombre de la colección"
+                required
+                value={editForm.name}
+                onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                autoFocus
+              />
+              <Input
+                type="text"
+                placeholder="Descripción (opcional)"
+                value={editForm.description}
+                onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 mt-6">
+              <Dialog.Close asChild>
+                <button
+                  disabled={editBusy}
+                  className="px-4 py-2 rounded-lg text-xs font-medium disabled:opacity-50"
+                  style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-surface)' }}
+                >
+                  Cancelar
+                </button>
+              </Dialog.Close>
+              <button
+                onClick={saveCollectionDetails}
+                disabled={
+                  editBusy ||
+                  !editForm.name.trim() ||
+                  (
+                    editForm.name.trim() === col.name &&
+                    editForm.description.trim() === (col.description ?? '')
+                  )
+                }
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+                style={{ background: 'var(--gold-bright)', color: '#0A1A10' }}
+              >
+                {editBusy && <Loader2 size={12} className="animate-spin" />}
+                {editBusy ? 'Guardando...' : 'Guardar'}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
       {/* Modal de decisión cuando la colección tiene documentos */}
       <Dialog.Root open={!!deleteAction} onOpenChange={(o) => { if (!o && !deleteBusy) setDeleteAction(null); }}>
         <Dialog.Portal>
@@ -1489,6 +1589,15 @@ function CollectionCard({
           <StatusBadge ok={col.is_active} label={col.is_active ? 'activa' : 'inactiva'} />
         </button>
         <div className="flex items-center gap-2">
+          <button
+            onClick={openEditModal}
+            disabled={editBusy || deleteBusy}
+            className="text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50"
+            style={{ borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
+            title="Editar colección"
+          >
+            <Pencil size={11} />
+          </button>
           <button
             onClick={startDelete}
             disabled={deleteBusy}
@@ -1886,7 +1995,7 @@ function ColeccionesSection({ roles }: { roles: RoleInfo[] }) {
             <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No se encontraron colecciones con los filtros aplicados.</p>
           )}
           {filteredCollections.map((col) => (
-            <CollectionCard key={col.id} col={col} users={users} roles={roles} onDeleted={load} flash={flash} />
+            <CollectionCard key={col.id} col={col} users={users} roles={roles} onChanged={load} flash={flash} />
           ))}
         </div>
       </Card>

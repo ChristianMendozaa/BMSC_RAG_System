@@ -31,6 +31,13 @@ router = APIRouter(prefix="/api/collections", tags=["collections"])
 _manage_dep = require_permission("can_manage_collections")
 
 
+def _normalize_collection_name(name: str) -> str:
+    normalized = name.strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="El nombre de la colección es obligatorio")
+    return normalized
+
+
 @router.get("/accessible", response_model=list[AccessibleCollectionOut])
 async def get_accessible_collections(
     db: AsyncSession = Depends(get_pg_db),
@@ -188,14 +195,15 @@ async def create_collection(
     db: AsyncSession = Depends(get_pg_db),
     current_user: PGUser = Depends(_manage_dep),
 ):
+    name = _normalize_collection_name(body.name)
     existing = await db.scalar(
-        select(Collection).where(Collection.name == body.name)
+        select(Collection).where(Collection.name == name)
     )
     if existing:
         raise HTTPException(status_code=400, detail="Ya existe una colección con ese nombre")
 
     col = Collection(
-        name=body.name,
+        name=name,
         description=body.description,
         is_active=True,
         created_by=current_user.id,
@@ -230,7 +238,16 @@ async def update_collection(
         raise HTTPException(status_code=404, detail="Colección no encontrada")
 
     if body.name is not None:
-        col.name = body.name
+        name = _normalize_collection_name(body.name)
+        existing = await db.scalar(
+            select(Collection).where(
+                Collection.name == name,
+                Collection.id != collection_id,
+            )
+        )
+        if existing:
+            raise HTTPException(status_code=400, detail="Ya existe una colección con ese nombre")
+        col.name = name
     if body.description is not None:
         col.description = body.description
     if body.is_active is not None:
