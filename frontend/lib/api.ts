@@ -408,6 +408,10 @@ export interface PgDocumentOut {
   rag_status: string;
   rag_chunk_count: number;
   rag_image_count: number;
+  index_progress_percent?: number | null;
+  index_progress_label?: string | null;
+  index_progress_current?: number | null;
+  index_progress_total?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -481,6 +485,22 @@ export async function updatePgDocument(
 
 export async function reactivatePgDocument(docId: string): Promise<void> {
   const res = await fetch(`${API_URL}/api/pg-documents/${docId}/reactivate`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<void>(res);
+}
+
+export async function cancelPgDocumentProcessing(docId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/pg-documents/${docId}/cancel-processing`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<void>(res);
+}
+
+export async function resumePgDocumentProcessing(docId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/pg-documents/${docId}/resume-processing`, {
     method: 'POST',
     headers: getAuthHeaders(),
   });

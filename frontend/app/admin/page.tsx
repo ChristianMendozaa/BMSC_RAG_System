@@ -16,7 +16,7 @@ import {
   getCollectionRolePerms, updateCollectionRolePerm,
   getCollectionUserPerms, updateCollectionUserPerm, deleteCollectionUserPerm,
   getPgDocuments, uploadToCollection, uploadPgDocument, downloadDocument, deletePgDocument,
-  updatePgDocument, reactivatePgDocument, permanentDeletePgDocument,
+  updatePgDocument, reactivatePgDocument, cancelPgDocumentProcessing, resumePgDocumentProcessing, permanentDeletePgDocument,
   getDocumentUserPerms, updateDocumentUserPerm, deleteDocumentUserPerm,
 } from '@/lib/api';
 import type {
@@ -51,13 +51,17 @@ function formatDate(iso: string) {
   });
 }
 
-const RAG_LABEL: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
-  pending:         { label: 'Pendiente',   color: '#A67B2A', icon: <Circle size={11} /> },
-  indexing_images: { label: 'Procesando',  color: '#2563EB', icon: <Loader2 size={11} className="animate-spin" /> },
-  ready:           { label: 'Listo',       color: '#2D7A4F', icon: <CheckCircle2 size={11} /> },
-  error:           { label: 'Error',       color: '#8B2233', icon: <AlertCircle size={11} /> },
-  sin_rag:         { label: 'Sin RAG',     color: '#4A6B58', icon: <Circle size={11} /> },
+const INDEX_LABEL: Record<string, { label: string; color: string; progress: number; icon: React.ReactNode }> = {
+  pending:         { label: 'En cola',              color: '#A67B2A', progress: 10, icon: <Circle size={11} /> },
+  processing:      { label: 'Procesando',           color: '#2563EB', progress: 35, icon: <Circle size={11} /> },
+  indexing_images: { label: 'Analizando contenido', color: '#2563EB', progress: 70, icon: <Circle size={11} /> },
+  ready:           { label: 'Listo',                color: '#2D7A4F', progress: 100, icon: <CheckCircle2 size={11} /> },
+  error:           { label: 'Error',                color: '#8B2233', progress: 100, icon: <AlertCircle size={11} /> },
+  cancelled:       { label: 'Detenido',             color: '#A67B2A', progress: 55, icon: <AlertCircle size={11} /> },
+  sin_rag:         { label: 'Sin procesar',         color: '#4A6B58', progress: 0, icon: <Circle size={11} /> },
 };
+
+const ACTIVE_INDEX_STATUSES = new Set(['pending', 'processing', 'indexing_images']);
 
 type PermKey = 'can_manage_users' | 'can_manage_collections' | 'can_upload_documents' | 'can_delete_documents';
 
@@ -182,6 +186,36 @@ function Toast({ msg, type }: { msg: string; type: 'ok' | 'err' }) {
       }}
     >
       {msg}
+    </div>
+  );
+}
+
+function ProgressBar({
+  value,
+  color,
+  subtle = false,
+  active = false,
+}: {
+  value: number;
+  color: string;
+  subtle?: boolean;
+  active?: boolean;
+}) {
+  const pct = Math.max(0, Math.min(100, value));
+  return (
+    <div
+      className="h-1.5 w-full min-w-[120px] overflow-hidden rounded-full"
+      style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)' }}
+      aria-label={`Progreso ${pct}%`}
+    >
+      <div
+        className={`h-full rounded-full transition-all duration-500 ${active ? 'animate-pulse' : ''}`}
+        style={{
+          width: `${pct}%`,
+          background: color,
+          opacity: subtle ? 0.75 : 1,
+        }}
+      />
     </div>
   );
 }
@@ -1399,7 +1433,7 @@ function CollectionCard({
                 >
                   <div className="text-sm font-medium">Eliminar todo permanentemente</div>
                   <div className="text-xs mt-0.5" style={{ color: '#fca5a5' }}>
-                    Borra los archivos, fragmentos RAG y vectores. Irreversible.
+                    Borra los archivos, fragmentos procesados y vectores. Irreversible.
                   </div>
                 </button>
               </div>
@@ -1983,6 +2017,7 @@ function BulkUploadModal({
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0); // índice 1-based del archivo en curso
   const [currentName, setCurrentName] = useState('');
+  const uploadPercent = files.length > 0 ? Math.round((progress / files.length) * 100) : 0;
 
   // Sube los archivos uno por uno (igual que la ingesta de a uno: cada POST
   // dispara su pipeline en background y la cola de inferencia los serializa).
@@ -2051,10 +2086,13 @@ function BulkUploadModal({
           </Select>
 
           {busy && (
-            <p className="text-xs mt-3 flex items-center gap-2" style={{ color: 'var(--text-muted)' }}>
-              <Loader2 size={12} className="animate-spin" />
-              <span className="truncate">Subiendo {progress} de {files.length}: {currentName}</span>
-            </p>
+            <div className="mt-3 space-y-2">
+              <div className="flex items-center justify-between gap-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+                <span className="truncate">Subiendo {progress} de {files.length}: {currentName}</span>
+                <span>{uploadPercent}%</span>
+              </div>
+              <ProgressBar value={uploadPercent} color="var(--gold-bright)" />
+            </div>
           )}
 
           <div className="flex justify-end gap-2 mt-5">
@@ -2070,7 +2108,7 @@ function BulkUploadModal({
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
               style={{ background: 'var(--gold-bright)', color: '#0A1A10' }}
             >
-              {busy ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+              <Upload size={12} />
               Subir {files.length === 1 ? 'documento' : `${files.length} documentos`}
             </button>
           </div>
@@ -2198,7 +2236,7 @@ function PermanentDeleteModal({
             </Dialog.Title>
           </div>
           <Dialog.Description className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
-            Esta acción borra el archivo del disco, los fragmentos RAG y los vectores. <strong>No se puede deshacer.</strong>
+            Esta acción borra el archivo del disco, los fragmentos procesados y los vectores. <strong>No se puede deshacer.</strong>
           </Dialog.Description>
           <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
             Escriba el nombre del archivo para confirmar:
@@ -2248,6 +2286,7 @@ function DocumentosSection({ canUpload, canDelete }: { canUpload: boolean; canDe
   const [moveDoc, setMoveDoc] = useState<PgDocumentOut | null>(null);
   const [purgeDoc, setPurgeDoc] = useState<PgDocumentOut | null>(null);
   const [reactivatingId, setReactivatingId] = useState<string | null>(null);
+  const [processingAction, setProcessingAction] = useState<{ docId: string; action: 'cancel' | 'resume' } | null>(null);
   const [docPermsDoc, setDocPermsDoc] = useState<PgDocumentOut | null>(null);
   const [docPerms, setDocPerms] = useState<DocUserPermEntry[]>([]);
   const [docPermsLoading, setDocPermsLoading] = useState(false);
@@ -2290,9 +2329,9 @@ function DocumentosSection({ canUpload, canDelete }: { canUpload: boolean; canDe
 
   // Auto-refresh while any doc is pending/processing
   useEffect(() => {
-    const hasPending = docs.some((d) => d.rag_status === 'pending' || d.rag_status === 'indexing_images');
+    const hasPending = docs.some((d) => ACTIVE_INDEX_STATUSES.has(d.rag_status));
     if (!hasPending) return;
-    const t = setInterval(load, 5000);
+    const t = setInterval(load, 2000);
     return () => clearInterval(t);
   }, [docs, load]);
 
@@ -2321,6 +2360,30 @@ function DocumentosSection({ canUpload, canDelete }: { canUpload: boolean; canDe
       flash(doc.collection_id ? 'Documento reactivado' : 'Documento reactivado en "Sin colección" — asígnele una colección');
     } catch (err) { flash(err instanceof Error ? err.message : 'Error', 'err'); }
     setReactivatingId(null);
+  };
+
+  const handleCancelProcessing = async (doc: PgDocumentOut) => {
+    setProcessingAction({ docId: doc.doc_id, action: 'cancel' });
+    try {
+      await cancelPgDocumentProcessing(doc.doc_id);
+      await load();
+      flash('Procesamiento detenido');
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'Error al detener procesamiento', 'err');
+    }
+    setProcessingAction(null);
+  };
+
+  const handleResumeProcessing = async (doc: PgDocumentOut) => {
+    setProcessingAction({ docId: doc.doc_id, action: 'resume' });
+    try {
+      await resumePgDocumentProcessing(doc.doc_id);
+      await load();
+      flash('Procesamiento reanudado');
+    } catch (err) {
+      flash(err instanceof Error ? err.message : 'Error al reanudar procesamiento', 'err');
+    }
+    setProcessingAction(null);
   };
 
   const openDocPerms = (doc: PgDocumentOut) => {
@@ -2481,7 +2544,7 @@ function DocumentosSection({ canUpload, canDelete }: { canUpload: boolean; canDe
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                  {['Nombre', 'Colección', 'Estado RAG', 'Tamaño', 'Fecha', 'Acciones'].map((h) => (
+                  {['Nombre', 'Colección', 'Estado', 'Tamaño', 'Fecha', 'Acciones'].map((h) => (
                     <th key={h} className="text-left py-2 px-3 text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
                       {h}
                     </th>
@@ -2490,9 +2553,16 @@ function DocumentosSection({ canUpload, canDelete }: { canUpload: boolean; canDe
               </thead>
               <tbody>
                 {visible.map((doc) => {
-                  const rag = RAG_LABEL[doc.rag_status] ?? RAG_LABEL['sin_rag'];
+                  const index = INDEX_LABEL[doc.rag_status] ?? INDEX_LABEL['sin_rag'];
+                  const progressValue = doc.index_progress_percent ?? index.progress;
+                  const progressLabel = doc.index_progress_label ?? index.label;
                   const isObsolete = doc.pg_status === 'OBSOLETE';
                   const noCol = !doc.collection_id;
+                  const isActiveIndexing = ACTIVE_INDEX_STATUSES.has(doc.rag_status);
+                  const canCancelIndexing = canUpload && isActiveIndexing;
+                  const canResumeIndexing = canUpload && (doc.rag_status === 'cancelled' || doc.rag_status === 'error');
+                  const actionBusy =
+                    processingAction?.docId === doc.doc_id ? processingAction.action : null;
                   return (
                     <tr
                       key={doc.doc_id}
@@ -2530,15 +2600,25 @@ function DocumentosSection({ canUpload, canDelete }: { canUpload: boolean; canDe
                         )}
                       </td>
                       <td className="py-3 px-3 whitespace-nowrap">
-                        <span
-                          className="flex items-center gap-1 text-xs"
-                          style={{ color: rag.color }}
-                        >
-                          {rag.icon} {rag.label}
-                          {doc.rag_status === 'ready' && doc.rag_chunk_count > 0 && (
-                            <span style={{ color: 'var(--text-muted)' }}>({doc.rag_chunk_count} fragmentos)</span>
+                        <div className="space-y-1.5 min-w-[150px]">
+                          <span
+                            className="flex items-center gap-1 text-xs"
+                            style={{ color: index.color }}
+                          >
+                            {index.icon} {progressLabel}
+                            {doc.rag_status === 'ready' && doc.rag_chunk_count > 0 && (
+                              <span style={{ color: 'var(--text-muted)' }}>({doc.rag_chunk_count} fragmentos)</span>
+                            )}
+                          </span>
+                          {(isActiveIndexing || doc.rag_status === 'cancelled' || doc.rag_status === 'error') && (
+                            <ProgressBar
+                              value={progressValue}
+                              color={index.color}
+                              subtle={doc.rag_status === 'cancelled'}
+                              active={isActiveIndexing}
+                            />
                           )}
-                        </span>
+                        </div>
                       </td>
                       <td className="py-3 px-3 whitespace-nowrap text-xs" style={{ color: 'var(--text-secondary)' }}>
                         {formatBytes(doc.file_size_bytes)}
@@ -2586,6 +2666,34 @@ function DocumentosSection({ canUpload, canDelete }: { canUpload: boolean; canDe
                               title="Marcar como obsoleto"
                             >
                               <Trash2 size={11} /> Obsoleto
+                            </button>
+                          )}
+                          {canCancelIndexing && (
+                            <button
+                              onClick={() => handleCancelProcessing(doc)}
+                              disabled={!!actionBusy}
+                              className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50"
+                              style={{ borderColor: '#A67B2A', color: '#fbbf24' }}
+                              title="Detener procesamiento"
+                            >
+                              {actionBusy === 'cancel'
+                                ? <Loader2 size={11} className="animate-spin" />
+                                : <X size={11} />}
+                              Parar
+                            </button>
+                          )}
+                          {canResumeIndexing && (
+                            <button
+                              onClick={() => handleResumeProcessing(doc)}
+                              disabled={!!actionBusy}
+                              className="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50"
+                              style={{ borderColor: '#2D7A4F', color: '#4ade80' }}
+                              title="Reanudar procesamiento"
+                            >
+                              {actionBusy === 'resume'
+                                ? <Loader2 size={11} className="animate-spin" />
+                                : <RotateCcw size={11} />}
+                              Reanudar
                             </button>
                           )}
                           {isObsolete && canUpload && (

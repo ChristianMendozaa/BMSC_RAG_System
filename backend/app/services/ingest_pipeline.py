@@ -6,6 +6,7 @@ import re
 import time
 import uuid as _uuid_mod
 from collections import defaultdict
+from typing import Any
 
 from sqlalchemy import and_, select
 
@@ -49,10 +50,43 @@ def _perf_log(msg: str, *args) -> None:
 
 
 _cancelled_docs: set[str] = set()
+_progress_by_doc: dict[str, dict[str, Any]] = {}
+
+
+def get_pipeline_progress(doc_id: str) -> dict[str, Any] | None:
+    progress = _progress_by_doc.get(doc_id)
+    return dict(progress) if progress is not None else None
+
+
+def _set_progress(
+    doc_id: str,
+    percent: int,
+    label: str,
+    current: int | None = None,
+    total: int | None = None,
+) -> None:
+    _progress_by_doc[doc_id] = {
+        "percent": max(0, min(100, percent)),
+        "label": label,
+        "current": current,
+        "total": total,
+    }
+
+
+def _clear_progress(doc_id: str) -> None:
+    _progress_by_doc.pop(doc_id, None)
 
 
 def cancel_pipeline(doc_id: str) -> None:
     _cancelled_docs.add(doc_id)
+
+
+def clear_pipeline_cancellation(doc_id: str) -> None:
+    _clear_cancelled(doc_id)
+
+
+def is_pipeline_cancellation_pending(doc_id: str) -> bool:
+    return _is_cancelled(doc_id)
 
 
 def _is_cancelled(doc_id: str) -> bool:
@@ -72,7 +106,25 @@ _RAG_TO_INDEX_STATUS: dict[str, str] = {
     "indexing_images": "INDEXING",
     "ready": "READY",
     "error": "ERROR",
+    "cancelled": "ERROR",
 }
+
+
+async def _mark_cancelled(doc_id: str) -> None:
+    _clear_cancelled(doc_id)
+    await _update_doc_status(
+        doc_id,
+        "cancelled",
+        "Procesamiento detenido por el usuario",
+    )
+
+
+async def _cancel_if_requested(doc_id: str, checkpoint: str) -> bool:
+    if not _is_cancelled(doc_id):
+        return False
+    logger.info("doc_id=%s: pipeline cancelado en checkpoint=%s", doc_id, checkpoint)
+    await _mark_cancelled(doc_id)
+    return True
 
 
 async def _update_doc_status(
@@ -104,6 +156,9 @@ async def _update_doc_status(
 
         await session.commit()
 
+    if status in {"ready", "error", "cancelled"}:
+        _clear_progress(doc_id)
+
 
 async def _upload_and_store_image(
     doc_id: str,
@@ -124,12 +179,17 @@ async def _upload_and_store_image(
 async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
     t_start = time.monotonic()
     logger.info("doc_id=%s: ─── Iniciando ingesta: %r ───", doc_id, filename)
+    _set_progress(doc_id, 2, "Preparando procesamiento")
 
     ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
     mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
+    if await _cancel_if_requested(doc_id, "start"):
+        return
+
     # ── Step 1: Upload original file ──────────────────────────────────────
     logger.info("doc_id=%s: [1/5] Subiendo archivo original...", doc_id)
+    _set_progress(doc_id, 5, "Guardando archivo")
     _t = time.perf_counter()
     try:
         minio_path = f"{doc_id}/{filename}"
@@ -147,10 +207,15 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
         return
     _perf_log("doc_id=%s: step1 upload-original: %.3fs", doc_id, time.perf_counter() - _t)
 
+    if await _cancel_if_requested(doc_id, "after-upload"):
+        return
+
+    _set_progress(doc_id, 12, "Archivo guardado")
     await _update_doc_status(doc_id, "processing")
 
     # ── Step 2: Parse document ─────────────────────────────────────────────
     logger.info("doc_id=%s: [2/5] Parseando documento (%s)...", doc_id, ext)
+    _set_progress(doc_id, 20, "Leyendo contenido")
     _t = time.perf_counter()
     try:
         parse_result = parse_file(ext, file_bytes)
@@ -158,6 +223,11 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
         logger.error("doc_id=%s: parser failed: %s", doc_id, exc)
         await _update_doc_status(doc_id, "error", f"Parser error: {exc}")
         return
+
+    if await _cancel_if_requested(doc_id, "after-parse"):
+        return
+
+    _set_progress(doc_id, 25, "Contenido leído")
 
     n_text = len(parse_result.text_blocks)
     n_imgs = len(parse_result.image_blocks)
@@ -205,6 +275,7 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
     _t = time.perf_counter()
     if total_images > 0:
         logger.info("doc_id=%s: [3/5] Subiendo %d imágenes al almacenamiento...", doc_id, total_images)
+        _set_progress(doc_id, 30, f"Preparando {total_images} imágenes", 0, total_images)
         upload_results = await asyncio.gather(
             *[_upload_and_store_image(doc_id, img) for img in image_blocks],
             return_exceptions=True,
@@ -212,15 +283,14 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
     else:
         upload_results = []
         logger.info("doc_id=%s: [3/5] Sin imágenes que procesar", doc_id)
+        _set_progress(doc_id, 45, "Sin imágenes; preparando texto")
     _perf_log(
         "doc_id=%s: step3 upload-imagenes: %.3fs (%d imgs)",
         doc_id, time.perf_counter() - _t, total_images,
     )
 
     # ── Step 4: Describe images with Gemma VLM (sequential — not thread-safe) ─
-    if _is_cancelled(doc_id):
-        logger.info("doc_id=%s: pipeline cancelado antes de describir imágenes", doc_id)
-        _clear_cancelled(doc_id)
+    if await _cancel_if_requested(doc_id, "before-image-descriptions"):
         return
 
     await _update_doc_status(doc_id, "indexing_images")
@@ -239,27 +309,66 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
 
     if total_images > 0:
         logger.info("doc_id=%s: [4/5] Describiendo imágenes con Gemma (0/%d)...", doc_id, total_images)
+        _set_progress(doc_id, 35, f"Analizando imagen 1 de {total_images}", 1, total_images)
 
     _t = time.perf_counter()
     for i, (result_item, img_block) in enumerate(zip(upload_results, image_blocks)):
-        if _is_cancelled(doc_id):
-            logger.info("doc_id=%s: pipeline cancelado durante descripción de imágenes", doc_id)
-            _clear_cancelled(doc_id)
+        if await _cancel_if_requested(doc_id, "during-image-descriptions"):
             return
 
         if isinstance(result_item, Exception) or result_item is None:
             logger.warning("doc_id=%s: [Image %d/%d] upload falló, omitiendo", doc_id, i + 1, total_images)
+            completed = i + 1
+            percent = 35 + round((completed / max(1, total_images)) * 45)
+            _set_progress(
+                doc_id,
+                percent,
+                f"Imagen {completed} de {total_images} omitida",
+                completed,
+                total_images,
+            )
             continue
 
+        _set_progress(
+            doc_id,
+            35 + round((i / max(1, total_images)) * 45),
+            f"Analizando imagen {i + 1} de {total_images}",
+            i + 1,
+            total_images,
+        )
         logger.info(
             "doc_id=%s: [Image %d/%d] describiendo imagen en página %s...",
             doc_id, i + 1, total_images, img_block.page_number,
         )
         try:
-            description = await embedder.describe_image(
+            image_started = time.perf_counter()
+            image_percent = 35 + round((i / max(1, total_images)) * 45)
+            description_task = asyncio.create_task(embedder.describe_image(
                 img_block.data,
                 page_context=_page_context(img_block.page_number),
-            )
+            ))
+            while not description_task.done():
+                done, _pending = await asyncio.wait({description_task}, timeout=2)
+                if done:
+                    break
+                elapsed_seconds = int(time.perf_counter() - image_started)
+                if _is_cancelled(doc_id):
+                    _set_progress(
+                        doc_id,
+                        image_percent,
+                        f"Deteniendo al terminar imagen {i + 1} de {total_images} ({elapsed_seconds}s)",
+                        i + 1,
+                        total_images,
+                    )
+                else:
+                    _set_progress(
+                        doc_id,
+                        image_percent,
+                        f"Analizando imagen {i + 1} de {total_images} ({elapsed_seconds}s)",
+                        i + 1,
+                        total_images,
+                    )
+            description = await description_task
             image_descriptions[img_block.image_index] = description
             logger.info(
                 "doc_id=%s: [Image %d/%d] OK — %d caracteres de descripción",
@@ -272,6 +381,19 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
             )
             image_descriptions[img_block.image_index] = ""
 
+        if await _cancel_if_requested(doc_id, "after-image-description"):
+            return
+
+        completed = i + 1
+        percent = 35 + round((completed / max(1, total_images)) * 45)
+        _set_progress(
+            doc_id,
+            percent,
+            f"Analizadas {completed} de {total_images} imágenes",
+            completed,
+            total_images,
+        )
+
     if total_images > 0:
         _vlm_elapsed = time.perf_counter() - _t
         _perf_log(
@@ -282,6 +404,7 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
     # ── Step 5: Save image records to DB → get UUIDs ──────────────────────
     doc_uuid = _uuid_mod.UUID(doc_id)
     _t = time.perf_counter()
+    _set_progress(doc_id, 82, "Guardando resultados visuales")
 
     # Collect successfully uploaded images
     valid_images: list[tuple[str, object]] = []
@@ -314,6 +437,10 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
         doc_id, time.perf_counter() - _t, len(db_image_records),
     )
 
+    if await _cancel_if_requested(doc_id, "after-image-records"):
+        return
+
+    _set_progress(doc_id, 85, "Fusionando contenido")
     image_index_to_uuid: dict[int, str] = {
         rec.image_index: str(rec.id) for rec in db_image_records
     }
@@ -374,6 +501,7 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
     # ── Step 7: Chunk + embed + upsert (single pass) ──────────────────────
     logger.info("doc_id=%s: [5/5] Chunking + embedding del contenido fusionado...", doc_id)
     _t = time.perf_counter()
+    _set_progress(doc_id, 88, "Preparando fragmentos")
     chunks = chunker_service.chunk_text_blocks(merged_blocks)
     logger.info("doc_id=%s: %d chunks generados", doc_id, len(chunks))
     _perf_log(
@@ -390,8 +518,12 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
         )
         return
 
+    if await _cancel_if_requested(doc_id, "after-chunking"):
+        return
+
     texts = [c.content for c in chunks]
     _t = time.perf_counter()
+    _set_progress(doc_id, 92, "Generando vectores de búsqueda")
     try:
         vectors = await embedder.embed_texts_batch(texts)
     except Exception as exc:
@@ -405,6 +537,10 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
 
     logger.info("doc_id=%s: embeddings listos, subiendo %d chunks a ChromaDB...", doc_id, len(chunks))
 
+    if await _cancel_if_requested(doc_id, "after-embedding"):
+        return
+
+    _set_progress(doc_id, 96, "Guardando índice de búsqueda")
     chroma_items = []
     for i, chunk in enumerate(chunks):
         if i >= len(vectors):
@@ -432,6 +568,10 @@ async def run_pipeline(doc_id: str, file_bytes: bytes, filename: str) -> None:
         logger.error("doc_id=%s: ChromaDB upsert falló: %s", doc_id, exc)
         await _update_doc_status(doc_id, "error", f"ChromaDB error: {exc}")
         return
+
+    if await _cancel_if_requested(doc_id, "after-vector-upsert"):
+        return
+    _set_progress(doc_id, 98, "Finalizando procesamiento")
     _perf_log(
         "doc_id=%s: step7c chroma-upsert: %.3fs (%d chunks)",
         doc_id, time.perf_counter() - _t, len(chroma_items),

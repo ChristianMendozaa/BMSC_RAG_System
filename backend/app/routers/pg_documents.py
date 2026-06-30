@@ -8,7 +8,7 @@ from typing import Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,12 +17,22 @@ from app.config import settings
 from app.db.models.collection import Collection
 from app.db.models.document import PGDocument
 from app.db.models.document_version import DocumentVersion
+from app.db.models.rag_chunk import RagChunk
 from app.db.models.rag_document import RagDocument
+from app.db.models.rag_document_figure import RagDocumentFigure
+from app.db.models.rag_document_image import RagDocumentImage
 from app.db.models.user import PGUser
 from app.db.session import get_pg_db
 from app.dependencies import get_current_user
-from app.services import file_storage, hard_delete
-from app.services.ingest_pipeline import ACCEPTED_EXTENSIONS, run_pipeline
+from app.services import file_storage, hard_delete, vector_store
+from app.services.ingest_pipeline import (
+    ACCEPTED_EXTENSIONS,
+    cancel_pipeline,
+    clear_pipeline_cancellation,
+    get_pipeline_progress,
+    is_pipeline_cancellation_pending,
+    run_pipeline,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +53,10 @@ class PgDocumentOut(BaseModel):
     rag_status: str
     rag_chunk_count: int
     rag_image_count: int
+    index_progress_percent: int | None = None
+    index_progress_label: str | None = None
+    index_progress_current: int | None = None
+    index_progress_total: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -58,6 +72,39 @@ class DocumentPatch(BaseModel):
     title: str | None = None
     collection_id: uuid.UUID | None = None
     clear_collection: bool = False  # explícito para distinguir "no cambies" de "ponlo en null"
+
+
+_ACTIVE_INDEX_STATUSES = {"pending", "processing", "indexing_images"}
+
+
+def _can_manage_documents(user: PGUser) -> bool:
+    return user.role.is_system or user.role.can_upload_documents
+
+
+async def _get_doc_with_current_version(
+    pg_db: AsyncSession,
+    doc_id: uuid.UUID,
+) -> tuple[PGDocument, DocumentVersion]:
+    pg_doc = await pg_db.scalar(
+        select(PGDocument)
+        .where(PGDocument.id == doc_id)
+        .options(selectinload(PGDocument.versions))
+    )
+    if not pg_doc:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    current_version = next((v for v in pg_doc.versions if v.is_current), None)
+    if not current_version:
+        raise HTTPException(status_code=404, detail="Versión actual no encontrada")
+    return pg_doc, current_version
+
+
+async def _clear_index_artifacts(pg_db: AsyncSession, doc_id: uuid.UUID) -> None:
+    doc_id_str = str(doc_id)
+    await vector_store.delete_by_doc_id(doc_id_str)
+    await file_storage.delete_objects_with_prefix(settings.minio_bucket_images, f"{doc_id_str}/")
+    await pg_db.execute(delete(RagChunk).where(RagChunk.document_id == doc_id))
+    await pg_db.execute(delete(RagDocumentImage).where(RagDocumentImage.document_id == doc_id))
+    await pg_db.execute(delete(RagDocumentFigure).where(RagDocumentFigure.document_id == doc_id))
 
 
 @router.get("/pg-documents", response_model=list[PgDocumentOut])
@@ -124,6 +171,11 @@ async def list_pg_documents(
             continue
 
         rag_doc = rag_map.get(doc.id)
+        progress = (
+            get_pipeline_progress(str(doc.id))
+            if rag_doc and rag_doc.status in _ACTIVE_INDEX_STATUSES
+            else None
+        )
         items.append(
             PgDocumentOut(
                 doc_id=str(doc.id),
@@ -137,6 +189,10 @@ async def list_pg_documents(
                 rag_status=rag_doc.status if rag_doc else "sin_rag",
                 rag_chunk_count=rag_doc.chunk_count if rag_doc else 0,
                 rag_image_count=rag_doc.image_count if rag_doc else 0,
+                index_progress_percent=progress["percent"] if progress else None,
+                index_progress_label=progress["label"] if progress else None,
+                index_progress_current=progress["current"] if progress else None,
+                index_progress_total=progress["total"] if progress else None,
                 created_at=doc.created_at,
                 updated_at=doc.updated_at,
             )
@@ -354,6 +410,11 @@ async def patch_pg_document(
         col_name = await pg_db.scalar(
             select(Collection.name).where(Collection.id == pg_doc.collection_id)
         )
+    progress = (
+        get_pipeline_progress(str(pg_doc.id))
+        if rag_doc and rag_doc.status in _ACTIVE_INDEX_STATUSES
+        else None
+    )
     return PgDocumentOut(
         doc_id=str(pg_doc.id),
         title=pg_doc.title,
@@ -366,6 +427,10 @@ async def patch_pg_document(
         rag_status=rag_doc.status if rag_doc else "sin_rag",
         rag_chunk_count=rag_doc.chunk_count if rag_doc else 0,
         rag_image_count=rag_doc.image_count if rag_doc else 0,
+        index_progress_percent=progress["percent"] if progress else None,
+        index_progress_label=progress["label"] if progress else None,
+        index_progress_current=progress["current"] if progress else None,
+        index_progress_total=progress["total"] if progress else None,
         created_at=pg_doc.created_at,
         updated_at=pg_doc.updated_at,
     )
@@ -390,6 +455,90 @@ async def reactivate_pg_document(
 
     pg_doc.status = "ACTIVE"
     await pg_db.commit()
+
+
+@router.post("/pg-documents/{doc_id}/cancel-processing", status_code=204)
+async def cancel_pg_document_processing(
+    doc_id: uuid.UUID,
+    pg_db: AsyncSession = Depends(get_pg_db),
+    current_user: PGUser = Depends(get_current_user),
+):
+    """Detiene cooperativamente el procesamiento de un documento."""
+    if not _can_manage_documents(current_user):
+        raise HTTPException(status_code=403, detail="Se requiere permiso para modificar documentos")
+
+    rag_doc = await pg_db.scalar(select(RagDocument).where(RagDocument.id == doc_id))
+    if not rag_doc:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+
+    if rag_doc.status == "ready":
+        raise HTTPException(status_code=409, detail="El documento ya terminó de procesarse")
+    if rag_doc.status not in _ACTIVE_INDEX_STATUSES:
+        return
+
+    cancel_pipeline(str(doc_id))
+    rag_doc.status = "cancelled"
+    rag_doc.error_message = "Procesamiento detenido por el usuario"
+
+    ver = await pg_db.scalar(
+        select(DocumentVersion).where(
+            DocumentVersion.document_id == doc_id,
+            DocumentVersion.is_current == True,  # noqa: E712
+        )
+    )
+    if ver is not None:
+        ver.index_status = "ERROR"
+
+    await pg_db.commit()
+
+
+@router.post("/pg-documents/{doc_id}/resume-processing", status_code=204)
+async def resume_pg_document_processing(
+    doc_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    pg_db: AsyncSession = Depends(get_pg_db),
+    current_user: PGUser = Depends(get_current_user),
+):
+    """Reintenta el procesamiento desde el archivo ya almacenado."""
+    if not _can_manage_documents(current_user):
+        raise HTTPException(status_code=403, detail="Se requiere permiso para modificar documentos")
+
+    _pg_doc, current_version = await _get_doc_with_current_version(pg_db, doc_id)
+    rag_doc = await pg_db.scalar(select(RagDocument).where(RagDocument.id == doc_id))
+    if not rag_doc:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+
+    if rag_doc.status in _ACTIVE_INDEX_STATUSES:
+        raise HTTPException(status_code=409, detail="El documento ya se está procesando")
+    if rag_doc.status == "ready":
+        raise HTTPException(status_code=409, detail="El documento ya está listo")
+    if is_pipeline_cancellation_pending(str(doc_id)):
+        raise HTTPException(status_code=409, detail="La detención aún está finalizando. Intenta nuevamente en unos segundos")
+
+    try:
+        file_bytes = await file_storage.get_object_bytes(
+            settings.minio_bucket_documents,
+            current_version.file_path,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Error al leer el archivo: {exc}")
+
+    clear_pipeline_cancellation(str(doc_id))
+    await _clear_index_artifacts(pg_db, doc_id)
+
+    rag_doc.status = "pending"
+    rag_doc.error_message = None
+    rag_doc.chunk_count = 0
+    rag_doc.image_count = 0
+    current_version.index_status = "PENDING"
+    await pg_db.commit()
+
+    background_tasks.add_task(
+        run_pipeline,
+        str(doc_id),
+        file_bytes,
+        current_version.original_filename,
+    )
 
 
 @router.delete("/pg-documents/{doc_id}/permanent", status_code=204)
