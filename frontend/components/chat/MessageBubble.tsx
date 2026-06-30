@@ -3,8 +3,8 @@
 import { useState, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ZoomIn, FileText } from 'lucide-react';
-import type { Message, Source } from '@/types';
+import { CheckCircle2, Circle, FileText, Loader2, ZoomIn } from 'lucide-react';
+import type { AgentTraceEvent, Message, Source } from '@/types';
 import { getImageUrl, getDocumentDownloadUrl } from '@/lib/api';
 import ImageLightbox from './ImageLightbox';
 import ThinkingIndicator from './ThinkingIndicator';
@@ -271,6 +271,39 @@ function InlinePageCitations({ citations }: { citations: PageCitation[] }) {
   );
 }
 
+function AgentTraceList({ events }: { events: AgentTraceEvent[] }) {
+  if (events.length === 0) return null;
+
+  return (
+    <div
+      className="mt-3 space-y-1.5 border-t pt-3"
+      style={{ borderColor: 'var(--border-subtle)' }}
+    >
+      {events.map((event) => {
+        const icon =
+          event.status === 'completed' ? (
+            <CheckCircle2 size={13} style={{ color: 'var(--gold-bright)' }} />
+          ) : event.status === 'error' ? (
+            <Circle size={13} style={{ color: 'var(--text-muted)' }} />
+          ) : (
+            <Loader2 size={13} className="animate-spin" style={{ color: 'var(--gold-muted)' }} />
+          );
+        return (
+          <div key={event.id} className="flex items-start gap-2 text-xs">
+            <span className="mt-0.5 shrink-0">{icon}</span>
+            <span className="min-w-0">
+              <span style={{ color: 'var(--text-secondary)' }}>{event.title}</span>
+              {event.detail && (
+                <span style={{ color: 'var(--text-muted)' }}> · {event.detail}</span>
+              )}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Content splitting helpers ─────────────────────────────────────────────────
 
 function splitIntoSections(content: string): string[] {
@@ -366,7 +399,12 @@ export default function MessageBubble({ message }: Props) {
           }}
         >
           {message.isStreaming && !message.content ? (
-            <ThinkingIndicator message={message.statusMessage} />
+            <>
+              <ThinkingIndicator message={message.statusMessage} />
+              {message.mode === 'agentic' && (
+                <AgentTraceList events={message.traceEvents ?? []} />
+              )}
+            </>
           ) : useInterleavedLayout ? (
             <>
               {sections.map((section, i) => (

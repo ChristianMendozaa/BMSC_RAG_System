@@ -1,6 +1,8 @@
 import asyncio
 
 from app.services import rag
+from app.services import rag_agent
+from app.cache import response_cache
 from app.utils.inference_queue import InferenceQueue
 
 
@@ -95,3 +97,48 @@ def test_build_context_reports_retrieval_and_rerank_status(monkeypatch):
     asyncio.run(rag.build_context("consulta", ["doc-1"], status_callback=collect))
 
     assert statuses == ["retrieving", "reranking"]
+
+
+def test_agent_assessment_normalizes_string_booleans_and_limits_queries():
+    normalized = rag_agent._normalize_assessment({
+        "sufficient": "false",
+        "missing": "falta el procedimiento",
+        "followup_queries": ["paso uno", "paso dos", "paso tres"],
+    })
+
+    assert normalized == {
+        "sufficient": False,
+        "missing": "falta el procedimiento",
+        "followup_queries": ["paso uno", "paso dos"],
+    }
+
+
+def test_agent_merge_unique_deduplicates_text_and_images():
+    text = {
+        "type": "text",
+        "doc_id": "doc-1",
+        "page": 1,
+        "content": "Contenido relevante",
+    }
+    image = {
+        "type": "image",
+        "doc_id": "doc-1",
+        "page": 2,
+        "image_id": "img-1",
+        "content": "Figura relevante",
+    }
+
+    merged = rag_agent._merge_unique([text, image], [dict(text), dict(image)])
+
+    assert merged == [text, image]
+
+
+def test_response_cache_key_includes_mode():
+    docs = ["doc-2", "doc-1"]
+
+    assert response_cache._key("Consulta", docs, "fast") != response_cache._key(
+        "Consulta", docs, "agentic"
+    )
+    assert response_cache._key("Consulta", docs, "fast") == response_cache._key(
+        "  consulta ", list(reversed(docs)), "fast"
+    )

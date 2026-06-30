@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type {
   BlockerItem,
+  AgentTraceEvent,
   ChatRequest,
   ChatStatusStage,
   ChatSessionDetail,
@@ -823,6 +824,7 @@ export async function getConversationHistory(sessionId: string): Promise<Message
 export interface ChatStreamHandlers {
   onSession?: (sessionId: string) => void;
   onStatus?: (stage: ChatStatusStage | string, message: string) => void;
+  onTrace?: (event: AgentTraceEvent) => void;
   onToken: (token: string) => void;
   onDone: (sessionId: string, sources: Source[], opts?: { stopped?: boolean }) => void;
   onError: (err: Error) => void;
@@ -833,7 +835,7 @@ async function _consumeSSE(
   body: ReadableStream<Uint8Array>,
   handlers: ChatStreamHandlers,
 ): Promise<void> {
-  const { onSession, onStatus, onToken, onDone, onError } = handlers;
+  const { onSession, onStatus, onTrace, onToken, onDone, onError } = handlers;
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -862,12 +864,24 @@ async function _consumeSSE(
             sources?: Source[];
             message?: string;
             from_cache?: boolean;
+            id?: string;
+            title?: string;
+            detail?: string | null;
+            status?: AgentTraceEvent['status'];
           };
 
           if (payload.type === 'session' && payload.session_id) {
             onSession?.(payload.session_id);
           } else if (payload.type === 'status' && payload.stage) {
             onStatus?.(payload.stage, payload.message ?? '');
+          } else if (payload.type === 'trace' && payload.id && payload.title) {
+            onTrace?.({
+              id: payload.id,
+              stage: payload.stage ?? '',
+              title: payload.title,
+              detail: payload.detail ?? null,
+              status: payload.status ?? 'running',
+            });
           } else if (payload.type === 'token' && payload.content) {
             onToken(payload.content);
           } else if (payload.type === 'done') {
@@ -934,11 +948,25 @@ export async function stopChat(sessionId: string): Promise<void> {
 
 export async function getActiveGeneration(
   sessionId: string,
-): Promise<{ active: boolean; status: string; stage?: string; stage_message?: string; text: string }> {
+): Promise<{
+  active: boolean;
+  status: string;
+  stage?: string;
+  stage_message?: string;
+  mode?: 'fast' | 'agentic';
+  trace_events?: AgentTraceEvent[];
+  text: string;
+}> {
   const res = await fetch(`${API_URL}/api/chat/${sessionId}/active`, {
     headers: getAuthHeaders(),
   });
-  return handleResponse<{ active: boolean; status: string; text: string }>(res);
+  return handleResponse<{
+    active: boolean;
+    status: string;
+    mode?: 'fast' | 'agentic';
+    trace_events?: AgentTraceEvent[];
+    text: string;
+  }>(res);
 }
 
 export async function resumeStream(

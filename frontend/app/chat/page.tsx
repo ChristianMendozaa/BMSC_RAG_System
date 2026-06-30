@@ -15,7 +15,7 @@ import {
 } from '@/lib/api';
 import { useChatStream } from '@/lib/chat-stream-context';
 import type { AccessibleCollectionOut, BlockerItem, ChatSessionListItem } from '@/lib/api';
-import type { Message } from '@/types';
+import type { ChatMode, Message } from '@/types';
 import ChatWindow from '@/components/chat/ChatWindow';
 import MessageInput from '@/components/chat/MessageInput';
 import ChatHistoryPanel, { ResumeBlockerModal } from '@/components/chat/ChatHistoryPanel';
@@ -33,6 +33,8 @@ import {
   Download,
   Loader2,
   Pencil,
+  SearchCheck,
+  Zap,
 } from 'lucide-react';
 
 // ── Sidebar ────────────────────────────────────────────────────────────────
@@ -316,6 +318,7 @@ export default function ChatPage() {
   const [streamKey, setStreamKey] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
+  const [chatMode, setChatMode] = useState<ChatMode>('fast');
 
   // Collections & selection
   const [collections, setCollections] = useState<AccessibleCollectionOut[]>([]);
@@ -517,6 +520,8 @@ export default function ChatPage() {
       content: currentStream.content,
       sources: currentStream.sources,
       isStreaming: false,
+      traceEvents: currentStream.traceEvents,
+      mode: currentStream.mode,
     };
     setMessages((prev) => {
       const withoutPlaceholder = prev.filter((m) => !(m.role === 'assistant' && m.isStreaming));
@@ -542,6 +547,7 @@ export default function ChatPage() {
           session_id: sessionId,
           collection_id: activeCollectionId,
           document_ids: selectedDocIds.size > 0 ? Array.from(selectedDocIds) : null,
+          mode: chatMode,
         },
         {
           onNewSession: (realId) => {
@@ -554,7 +560,7 @@ export default function ChatPage() {
       // If we already have a session_id, the key equals it; otherwise use temp key
       setStreamKey(sessionId ?? key);
     },
-    [isStreaming, hasScope, sessionId, activeCollectionId, selectedDocIds, chatStream],
+    [isStreaming, hasScope, sessionId, activeCollectionId, selectedDocIds, chatMode, chatStream],
   );
 
   const sidebarProps: SidebarProps = {
@@ -700,6 +706,8 @@ export default function ChatPage() {
                         sources: [],
                         isStreaming: true,
                         statusMessage: currentStream.statusMessage,
+                        traceEvents: currentStream.traceEvents,
+                        mode: currentStream.mode,
                       },
                     ]
                   : messages
@@ -749,11 +757,46 @@ export default function ChatPage() {
               </div>
             )}
             {hasScope && (
-              <p className="text-xs mb-1.5" style={{ color: 'var(--gold-muted)' }}>
-                {selectedDocIds.size > 0
-                  ? `Consultando ${selectedDocIds.size} documento${selectedDocIds.size > 1 ? 's' : ''} de "${activeCol?.name}"`
-                  : `Consultando toda la colección: "${activeCol?.name}"`}
-              </p>
+              <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-xs" style={{ color: 'var(--gold-muted)' }}>
+                  {selectedDocIds.size > 0
+                    ? `Consultando ${selectedDocIds.size} documento${selectedDocIds.size > 1 ? 's' : ''} de "${activeCol?.name}"`
+                    : `Consultando toda la colección: "${activeCol?.name}"`}
+                </p>
+                <div
+                  className="inline-flex shrink-0 rounded-lg p-0.5"
+                  style={{
+                    border: '1px solid var(--border-gold)',
+                    background: 'rgba(212, 168, 67, 0.06)',
+                  }}
+                  aria-label="Modo de respuesta"
+                >
+                  {([
+                    { mode: 'fast' as const, label: 'Rápido', icon: Zap },
+                    { mode: 'agentic' as const, label: 'Agéntico', icon: SearchCheck },
+                  ]).map((item) => {
+                    const Icon = item.icon;
+                    const active = chatMode === item.mode;
+                    return (
+                      <button
+                        key={item.mode}
+                        type="button"
+                        onClick={() => setChatMode(item.mode)}
+                        disabled={isStreaming}
+                        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                        style={{
+                          background: active ? 'var(--gold-bright)' : 'transparent',
+                          color: active ? '#0A1A10' : 'var(--gold-muted)',
+                        }}
+                        title={item.mode === 'fast' ? 'Una búsqueda rápida' : 'Búsqueda con verificación adicional'}
+                      >
+                        <Icon size={12} />
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             )}
             <MessageInput
               value={inputValue}

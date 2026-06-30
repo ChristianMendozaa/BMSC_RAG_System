@@ -45,17 +45,22 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip()).lower()
 
 
-def _key(text: str, doc_ids: list[str] | None) -> str:
-    """Clave = hash(mensaje + scope).  El orden de doc_ids no importa."""
+def _key(text: str, doc_ids: list[str] | None, mode: str = "fast") -> str:
+    """Clave = hash(mensaje + scope + modo).  El orden de doc_ids no importa."""
     scope = ",".join(sorted(dict.fromkeys(doc_ids))) if doc_ids else "*"
-    return hashlib.md5(f"{_normalize(text)}\x1f{scope}".encode()).hexdigest()
+    safe_mode = mode if mode in {"fast", "agentic"} else "fast"
+    return hashlib.md5(f"{_normalize(text)}\x1f{scope}\x1f{safe_mode}".encode()).hexdigest()
 
 
-def get(message: str, doc_ids: list[str] | None) -> tuple[str, list[dict]] | None:
+def get(
+    message: str,
+    doc_ids: list[str] | None,
+    mode: str = "fast",
+) -> tuple[str, list[dict]] | None:
     """Retorna (response_text, sources) o None si no existe / expiró."""
     if not _DB_PATH:
         return None
-    k = _key(message, doc_ids)
+    k = _key(message, doc_ids, mode)
     now = time.time()
     with _connect() as conn:
         row = conn.execute(
@@ -76,11 +81,17 @@ def get(message: str, doc_ids: list[str] | None) -> tuple[str, list[dict]] | Non
     return response, json.loads(sources_json)
 
 
-def set(message: str, doc_ids: list[str] | None, response: str, sources: list[dict]) -> None:
+def set(
+    message: str,
+    doc_ids: list[str] | None,
+    response: str,
+    sources: list[dict],
+    mode: str = "fast",
+) -> None:
     """Guarda respuesta e indexa los doc_ids del scope para invalidación futura."""
     if not _DB_PATH:
         return
-    k = _key(message, doc_ids)
+    k = _key(message, doc_ids, mode)
     now = time.time()
     # Indexar por scope completo: así invalidate_by_doc_id borra la entrada en cuanto
     # cualquier documento del scope sea eliminado u obsoletizado, aunque no haya sido
